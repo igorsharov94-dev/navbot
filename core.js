@@ -1,5 +1,5 @@
 /*
- * Ядро навигации без GPS (для авто).
+ * Ядро навігації без GPS (для авто).
  * Чистые функции: геометрия, маршрут OSRM, точки поворотов, светофоры,
  * сопоставление поворотов, пойманных гироскопом, с маршрутом.
  */
@@ -29,9 +29,9 @@
 
   // ---------- Тексты манёвров ----------
   const DIR = {
-    left: 'налево', 'sharp left': 'резко налево', 'slight left': 'плавно налево',
-    right: 'направо', 'sharp right': 'резко направо', 'slight right': 'плавно направо',
-    straight: 'прямо', uturn: 'разворот'
+    left: 'ліворуч', 'sharp left': 'різко ліворуч', 'slight left': 'плавно ліворуч',
+    right: 'праворуч', 'sharp right': 'різко праворуч', 'slight right': 'плавно праворуч',
+    straight: 'прямо', uturn: 'розворот'
   };
 
   function maneuverText(st) {
@@ -40,21 +40,21 @@
     const on = nm ? ' на ' + nm : '';
     const dir = DIR[m] || '';
     switch (st.type) {
-      case 'depart': return 'Начните движение' + (nm ? ' по ' + nm : '');
-      case 'arrive': return 'Вы приехали';
+      case 'depart': return 'Почніть рух' + (nm ? ' по ' + nm : '');
+      case 'arrive': return 'Ви приїхали';
       case 'roundabout': case 'rotary': case 'roundabout turn':
-        return 'На круге ' + (st.exit ? st.exit + '-й съезд' : 'съезд') + on;
-      case 'merge': return 'Перестройтесь ' + dir + on;
-      case 'on ramp': return 'Заезд ' + dir + on;
-      case 'off ramp': return 'Съезд ' + dir + on;
-      case 'fork': return 'На развилке держитесь ' + (m.includes('left') ? 'левее' : 'правее') + on;
-      case 'end of road': return 'В конце дороги ' + dir + on;
+        return 'На колі ' + (st.exit ? st.exit + '-й з’їзд' : 'з’їзд') + on;
+      case 'merge': return 'Перелаштуйтеся ' + dir + on;
+      case 'on ramp': return 'В’їзд ' + dir + on;
+      case 'off ramp': return 'З’їзд ' + dir + on;
+      case 'fork': return 'На розвилці тримайтеся ' + (m.includes('left') ? 'лівіше' : 'правіше') + on;
+      case 'end of road': return 'Наприкінці дороги ' + dir + on;
       case 'continue': case 'new name':
-        return (m === 'straight' || !m) ? 'Прямо' + (nm ? ' по ' + nm : '') : 'Держитесь ' + dir + on;
+        return (m === 'straight' || !m) ? 'Прямо' + (nm ? ' по ' + nm : '') : 'Тримайтеся ' + dir + on;
       default:
-        if (m === 'uturn') return 'Развернитесь' + (nm ? ' на ' + nm : '');
+        if (m === 'uturn') return 'Розверніться' + (nm ? ' на ' + nm : '');
         if (m === 'straight') return 'Прямо' + (nm ? ' по ' + nm : '');
-        return 'Поверните ' + dir + on;
+        return 'Поверніть ' + dir + on;
     }
   }
 
@@ -67,7 +67,7 @@
   // ---------- Маршрут ----------
   function buildRoute(osrm, opts) {
     if (!osrm || osrm.code !== 'Ok' || !osrm.routes || !osrm.routes.length) {
-      throw new Error('маршрут не найден');
+      throw new Error('маршрут не знайдено');
     }
     const r = osrm.routes[0];
     const pts = [], steps = [];
@@ -225,8 +225,8 @@
     const between = signals.filter(x => x > from + 25 && x <= to + 40);
     if (!between.length) return '';
     const n = between.length, last = between[n - 1];
-    if (Math.abs(last - to) <= 40) return n === 1 ? 'на ближайшем светофоре' : 'на ' + n + '-м светофоре';
-    return n === 1 ? 'после ближайшего светофора' : 'после ' + n + '-го светофора';
+    if (Math.abs(last - to) <= 40) return n === 1 ? 'на найближчому світлофорі' : 'на ' + n + '-му світлофорі';
+    return n === 1 ? 'після найближчого світлофора' : 'після ' + n + '-го світлофора';
   }
 
   function fmtDist(d, approx) {
