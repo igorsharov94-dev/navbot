@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Навигатор без GPS</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="core.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --fg: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --btn: var(--tg-theme-button-color, #2b7de9);
+    --btnfg: var(--tg-theme-button-text-color, #ffffff);
+    --card: var(--tg-theme-secondary-bg-color, #f1f1f4);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 15px/1.3 -apple-system, system-ui, Roboto, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel { position: absolute; left: 8px; right: 8px; z-index: 1000; background: var(--bg);
+    border-radius: 14px; box-shadow: 0 2px 14px rgba(0,0,0,.28); padding: 10px; }
+  #top { top: 8px; }
+  #setup, #drive { bottom: 8px; }
+  #instr { font-size: 22px; font-weight: 700; line-height: 1.15; }
+  #sub { color: var(--hint); margin-top: 3px; font-size: 16px; }
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .pill { padding: 3px 9px; border-radius: 10px; font-size: 13px; font-weight: 600; background: #e9e9ee; color: #444; }
+  .st-gps { background: #d6f4dc; color: #0f6a29; }
+  .st-dr { background: #ffefc4; color: #7a5200; }
+  .st-bad { background: #ffd9d6; color: #8a1c12; }
+  button { border: 0; border-radius: 10px; padding: 11px 10px; font-size: 15px; font-weight: 600;
+    background: var(--card); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--btn); color: var(--btnfg); }
+  button.on { box-shadow: inset 0 0 0 2px var(--btn); }
+  .row { display: flex; gap: 6px; margin-top: 6px; }
+  .row > * { flex: 1 1 0; min-width: 0; }
+  input { width: 100%; padding: 11px; border-radius: 10px; border: 1px solid var(--hint);
+    background: var(--bg); color: var(--fg); font-size: 16px; }
+  #results div { padding: 9px 4px; border-bottom: 1px solid var(--card); font-size: 14px; }
+  .hint { color: var(--hint); font-size: 13px; margin-top: 6px; }
+  #toast { position: absolute; left: 50%; transform: translateX(-50%); bottom: 190px; z-index: 1200;
+    background: rgba(0,0,0,.82); color: #fff; padding: 9px 13px; border-radius: 10px; display: none;
+    max-width: 92%; text-align: center; font-size: 14px; }
+  .modal { top: 50%; transform: translateY(-50%); z-index: 1300; }
+  #calYaw { font-size: 30px; font-weight: 700; text-align: center; margin: 10px 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="top" class="panel">
+  <div id="instr">Куда едем?</div>
+  <div id="sub">Введите адрес назначения внизу</div>
+  <div class="pills"><span id="status" class="pill">Ищу местоположение…</span><span id="motion" class="pill hidden"></span></div>
+</div>
+
+<div id="setup" class="panel">
+  <input id="dest" placeholder="Куда: улица, дом, место" autocomplete="off">
+  <div id="results"></div>
+  <div class="row">
+    <button id="btnPickDest">Куда — на карте</button>
+    <button id="btnPickStart">Откуда — на карте</button>
+  </div>
+  <div class="row">
+    <button id="btnGo" class="primary">Поехали</button>
+    <button id="btnCalib" style="flex:0 0 52px">⚙</button>
+  </div>
+  <div id="setupHint" class="hint">Совет: стройте маршрут, пока GPS ещё работает. Телефон — в держателе.</div>
+</div>
+
+<div id="drive" class="panel hidden">
+  <div class="row" id="speedRow">
+    <button data-sp="auto" class="on">Авто</button>
+    <button data-sp="jam">Пробка</button>
+    <button data-sp="city">Город</button>
+    <button data-sp="avenue">Проспект</button>
+  </div>
+  <div class="row">
+    <button id="btnTurnDone">Проехал поворот</button>
+    <button id="btnHere">Я здесь</button>
+  </div>
+  <div class="row">
+    <button id="btnFollow">Центр</button>
+    <button id="btnStop">Завершить</button>
+    <button id="btnCalib2" style="flex:0 0 52px">⚙</button>
+  </div>
+</div>
+
+<div id="calib" class="panel modal hidden">
+  <b>Проверка датчиков</b>
+  <div class="hint">Положите телефон на стол и плавно поверните его против часовой стрелки (влево) на четверть оборота. Должно появиться «↺ влево». Если показывает «вправо» — нажмите «Поменять направление».</div>
+  <div id="calYaw">—</div>
+  <div id="calInfo" class="hint"></div>
+  <div class="row">
+    <button id="btnInvert">Поменять направление</button>
+    <button id="btnCalClose" class="primary">Готово</button>
+  </div>
+</div>
+
+<div id="offroute" class="panel modal hidden">
+  <b id="offText">Похоже, вы свернули с маршрута</b>
+  <div class="row">
+    <button id="btnOffYes" class="primary">Да, укажу где я</button>
+    <button id="btnOffNo">Нет, всё ок</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  const NC = window.NavCore;
+
+  const CFG = {
+    OSRM: 'https://router.project-osrm.org/route/v1/driving/',
+    NOMINATIM: 'https://nominatim.openstreetmap.org/search',
+    OVERPASS: 'https://overpass-api.de/api/interpreter',
+    SPEEDS: { jam: 10, city: 30, avenue: 50 },   // км/ч
+    GPS_MAX_ACC: 80,        // м — хуже этой точности не верим
+    GPS_MAX_SPEED: 160,     // км/ч — быстрее «едет» только подмена
+    GPS_BACK_MAXD: 80,      // м — в режиме датчиков принимаем GPS только рядом с маршрутом
+    GPS_GOOD_NEEDED: 3,     // сколько хороших точек подряд нужно, чтобы снова поверить GPS
+    OFFROUTE_D: 60,         // м — съезд с маршрута в режиме GPS
+    TURN_START: 0.12,       // рад/с — начало поворота
+    TURN_END: 0.05,         // рад/с — конец поворота
+    TURN_END_MS: 1200,
+    TURN_MIN_DEG: 40,
+    TURN_OVERSHOOT: 60,     // м — дальше нераспознанного поворота расчёт не уходит
+    CAP_RELEASE_MS: 25000,
+    STOP_STD: 0.10          // м/с² — вибрация, ниже которой считаем, что стоим
+  };
+
+  // ---------- Telegram ----------
+  const W = (window.Telegram && window.Telegram.WebApp) || null;
+  const inTg = !!(W && W.initData);
+  const tgv = v => !!(inTg && W.isVersionAtLeast && W.isVersionAtLeast(v));
+  const IOS = (W && W.platform === 'ios') || /iPhone|iPad|iPod/.test(navigator.userAgent);
+  if (inTg) {
+    try {
+      W.ready(); W.expand();
+      if (tgv('7.7')) W.disableVerticalSwipes();
+      if (tgv('6.2')) W.enableClosingConfirmation();
+    } catch (e) {}
+  }
+
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+  let toastT = null;
+  function toast(msg, ms) {
+    const el = $('toast'); el.textContent = msg; el.style.display = 'block';
+    clearTimeout(toastT); toastT = setTimeout(() => { el.style.display = 'none'; }, ms || 3500);
+  }
+
+  // ---------- Звук и голос ----------
+  let actx = null;
+  function initAudio() {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.resume) actx.resume();
+    } catch (e) {}
+    try { if ('speechSynthesis' in window) speechSynthesis.getVoices(); } catch (e) {}
+  }
+  function beep(freq) {
+    if (!actx) return;
+    try {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.value = freq || 880; g.gain.value = 0.15;
+      o.connect(g); g.connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + 0.18);
+    } catch (e) {}
+  }
+  function haptic(kind) {
+    try {
+      if (!tgv('6.1')) return;
+      if (kind === 'light') W.HapticFeedback.impactOccurred('light');
+      else W.HapticFeedback.notificationOccurred('warning');
+    } catch (e) {}
+  }
+  const hasSpeech = 'speechSynthesis' in window;
+  function say(text) {
+    beep();
+    haptic();
+    if (!hasSpeech) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ru-RU'; u.rate = 1.05;
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  let wakeLock = null;
+  async function requestWake() {
+    try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && st.nav) requestWake();
+  });
+
+  // ---------- Карта ----------
+  const map = L.map('map', { zoomControl: false }).setView([50.4501, 30.5234], 12);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(map);
+  let routeLine = null, posMarker = null, accCircle = null, startMarker = null, destMarker = null;
+  const signalLayer = L.layerGroup().addTo(map);
+  map.on('dragstart', () => { st.follow = false; });
+
+  function drawPos(p, r, kind) {
+    const color = kind === 'gps' ? '#1f7ae0' : '#e08a00';
+    if (!posMarker) {
+      posMarker = L.circleMarker(p, { radius: 9, weight: 3, color: '#fff', fillColor: color, fillOpacity: 1 }).addTo(map);
+      accCircle = L.circle(p, { radius: r, weight: 1, color, fillColor: color, fillOpacity: 0.12 }).addTo(map);
+    } else {
+      posMarker.setLatLng(p); posMarker.setStyle({ fillColor: color });
+      accCircle.setLatLng(p); accCircle.setRadius(r); accCircle.setStyle({ color, fillColor: color });
+    }
+  }
+
+  // ---------- Состояние ----------
+  const st = {
+    nav: false, mode: 'none',          // 'gps' | 'dr' (датчики)
+    s: 0, anchorS: 0, lastTurnS: -1e9, // положение вдоль маршрута, м
+    follow: true, speedMode: 'auto', vAuto: 30 / 3.6,
+    pick: null, start: null, dest: null, destName: '',
+    spoken: {}, offStreak: 0, lastReroute: 0, capT: 0, lastSnapSig: null,
+    arrived: false, lastPan: 0
+  };
+  let route = null;
+
+  // ---------- Датчики движения ----------
+  const Motion = {
+    grav: [0, 0, 0], gN: 0, scale: 1, magSum: 0, samples: 0, unitChecked: false,
+    buf: [], std: 0, moving: false, candT: null, movingSince: 0,
+    bias: 0, yawRate: 0, lastGyroT: 0, idleStd: null, moveStd: null,
+    invert: store.get('nav_invert') === '1',
+
+    onAcc(x, y, z) {
+      const t = performance.now();
+      if (!this.unitChecked) {
+        this.magSum += Math.hypot(x, y, z); this.samples++;
+        if (this.samples >= 20) {
+          this.unitChecked = true;
+          if (this.magSum / this.samples < 3) this.scale = 9.81; // значения пришли в g
+        }
+      }
+      x *= this.scale; y *= this.scale; z *= this.scale;
+      const m = Math.hypot(x, y, z);
+      const k = 0.04;
+      if (this.gN === 0) this.grav = [x, y, z];
+      else this.grav = [this.grav[0] + k * (x - this.grav[0]), this.grav[1] + k * (y - this.grav[1]), this.grav[2] + k * (z - this.grav[2])];
+      this.gN++;
+
+      this.buf.push([t, m]);
+      while (this.buf.length && t - this.buf[0][0] > 1500) this.buf.shift();
+      if (this.buf.length < 8) return;
+      let mean = 0; for (const b of this.buf) mean += b[1]; mean /= this.buf.length;
+      let v = 0; for (const b of this.buf) v += (b[1] - mean) ** 2;
+      this.std = Math.sqrt(v / this.buf.length);
+
+      const want = this.std > this.threshold();
+      if (want !== this.moving) {
+        if (this.candT == null) this.candT = t;
+        else if (t - this.candT > (want ? 800 : 2000)) {
+          this.moving = want; this.candT = null;
+          if (want) this.movingSince = t;
+          onMotionChange(want);
+        }
+      } else this.candT = null;
+    },
+
+    threshold() {
+      if (this.idleStd != null && this.moveStd != null && this.moveStd > this.idleStd * 1.3) {
+        return Math.sqrt(this.idleStd * this.moveStd);
+      }
+      return CFG.STOP_STD;
+    },
+
+    // Обучение порога по реальной скорости, пока GPS исправен
+    learn(speed) {
+      const ema = (a, b) => a == null ? b : a * 0.9 + b * 0.1;
+      if (speed < 0.5) this.idleStd = ema(this.idleStd, this.std);
+      else if (speed > 4) this.moveStd = ema(this.moveStd, this.std);
+    },
+
+    movingFor() { return this.moving ? performance.now() - this.movingSince : 0; },
+
+    up() {
+      const g = this.grav, n = Math.hypot(g[0], g[1], g[2]);
+      if (n < 3) return null;
+      const s = IOS ? -1 : 1;
+      return [g[0] / n * s, g[1] / n * s, g[2] / n * s];
+    },
+
+    onGyro(x, y, z) {
+      const t = performance.now();
+      const dt = this.lastGyroT ? Math.min(0.2, (t - this.lastGyroT) / 1000) : 0;
+      this.lastGyroT = t;
+      const up = this.up();
+      if (!up || !dt) return;
+      let w = x * up[0] + y * up[1] + z * up[2];   // вращение вокруг вертикали
+      if (this.invert) w = -w;
+      if (!this.moving && Math.abs(w - this.bias) < 0.05) this.bias += 0.01 * (w - this.bias);
+      w -= this.bias;
+      this.yawRate = w;
+      Turn.feed(w, dt, t);
+    }
+  };
+
+  // Детектор поворотов: интегрирует угол, пока машина вращается
+  const Turn = {
+    active: false, angle: 0, quietMs: 0, startT: 0,
+    feed(w, dt, now) {
+      if (!this.active) {
+        if (Math.abs(w) <= CFG.TURN_START) return;
+        this.active = true; this.angle = 0; this.quietMs = 0; this.startT = now;
+      }
+      this.angle += w * dt;
+      if (Math.abs(w) < CFG.TURN_END) {
+        this.quietMs += dt * 1000;
+        if (this.quietMs > CFG.TURN_END_MS) {
+          this.active = false;
+          const deg = this.angle * 180 / Math.PI;
+          if (Math.abs(deg) >= CFG.TURN_MIN_DEG) onTurn(deg);
+        }
+      } else this.quietMs = 0;
+      if (now - this.startT > 40000) this.active = false;
+    }
+  };
+
+  const Sensors = {
+    started: false, kind: '',
+    async ensure() {
+      if (this.started) return true;
+      if (tgv('8.0') && W.Accelerometer && W.Gyroscope) {
+        W.onEvent('accelerometerChanged', () => Motion.onAcc(W.Accelerometer.x, W.Accelerometer.y, W.Accelerometer.z));
+        W.onEvent('gyroscopeChanged', () => Motion.onGyro(W.Gyroscope.x, W.Gyroscope.y, W.Gyroscope.z));
+        W.onEvent('accelerometerFailed', e => toast('Акселерометр недоступен' + (e && e.error ? ': ' + e.error : '')));
+        W.onEvent('gyroscopeFailed', e => toast('Гироскоп недоступен' + (e && e.error ? ': ' + e.error : '')));
+        W.Accelerometer.start({ refresh_rate: 50 });
+        W.Gyroscope.start({ refresh_rate: 50 });
+        this.kind = 'telegram'; this.started = true;
+        return true;
+      }
+      try {
+        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+          const r = await DeviceMotionEvent.requestPermission();
+          if (r !== 'granted') { toast('Нет доступа к датчикам движения'); return false; }
+        }
+      } catch (e) {}
+      const d2r = Math.PI / 180;
+      window.addEventListener('devicemotion', e => {
+        const a = e.accelerationIncludingGravity, r = e.rotationRate;
+        if (a && a.x != null) Motion.onAcc(a.x, a.y, a.z);
+        if (r && r.alpha != null) Motion.onGyro(r.beta * d2r, r.gamma * d2r, r.alpha * d2r);
+      });
+      this.kind = 'browser'; this.started = true;
+      return true;
+    }
+  };
+
+  // ---------- Геопозиция и фильтр подмены ----------
+  const G = { prev: null, lastGood: null, goodStreak: 0, badStreak: 0, staticSince: 0, lastReason: '', denied: false };
+  const freshGood = () => !!(G.lastGood && Date.now() - G.lastGood.t < 20000);
+
+  const Loc = {
+    busy: false, busyT: 0,
+    start() {
+      if (tgv('8.0') && W.LocationManager) {
+        W.LocationManager.init(() => {
+          if (W.LocationManager.isLocationAvailable) {
+            this.pollTg(); setInterval(() => this.pollTg(), 2000);
+          } else this.startBrowser();
+        });
+      } else this.startBrowser();
+    },
+    pollTg() {
+      if (this.busy && Date.now() - this.busyT < 10000) return;
+      this.busy = true; this.busyT = Date.now();
+      W.LocationManager.getLocation(loc => {
+        this.busy = false;
+        if (loc) {
+          G.denied = false;
+          onFix({ lat: loc.latitude, lon: loc.longitude, acc: loc.horizontal_accuracy, speed: loc.speed, t: Date.now() });
+        } else if (W.LocationManager.isAccessRequested && !W.LocationManager.isAccessGranted) {
+          G.denied = true;
+        }
+      });
+    },
+    startBrowser() {
+      if (!navigator.geolocation) return;
+      navigator.geolocation.watchPosition(
+        p => onFix({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, speed: p.coords.speed, t: Date.now() }),
+        err => { if (err.code === 1) G.denied = true; },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+      );
+    }
+  };
+
+  function onFix(f) {
+    if (!f || !isFinite(f.lat) || !isFinite(f.lon)) return;
+    const reasons = [];
+    if (f.acc != null && f.acc > CFG.GPS_MAX_ACC) reasons.push('низкая точность');
+
+    const ref = G.prev;
+    if (ref) {
+      const dt = (f.t - ref.t) / 1000, d = NC.dist([ref.lat, ref.lon], [f.lat, f.lon]);
+      if (dt > 0 && d > 150 && d / dt * 3.6 > CFG.GPS_MAX_SPEED) reasons.push('скачок координат');
+      if (d < 3) { if (!G.staticSince) G.staticSince = ref.t; } else G.staticSince = 0;
+    }
+    if (G.staticSince && f.t - G.staticSince > 12000 && Motion.moving && Motion.movingFor() > 10000) {
+      reasons.push('координаты застыли, а машина едет');
+    }
+    if (!reasons.length && G.lastGood) {
+      const dt = (f.t - G.lastGood.t) / 1000, d = NC.dist([G.lastGood.lat, G.lastGood.lon], [f.lat, f.lon]);
+      if (dt > 0 && d > 300 && d / dt * 3.6 > CFG.GPS_MAX_SPEED) reasons.push('скачок координат');
+    }
+    let pr = null;
+    if (route && st.nav) {
+      pr = NC.project(route, [f.lat, f.lon], st.s);
+      if (st.mode === 'dr' && pr.d > CFG.GPS_BACK_MAXD) reasons.push('точка далеко от маршрута');
+    }
+    G.prev = f;
+
+    if (reasons.length) {
+      G.badStreak++; G.goodStreak = 0; G.lastReason = reasons[0];
+      if (st.nav && st.mode === 'gps' && G.badStreak >= 2) toDR(reasons[0]);
+      return;
+    }
+    G.badStreak = 0; G.goodStreak++;
+    if (st.nav && st.mode === 'dr' && G.goodStreak < CFG.GPS_GOOD_NEEDED) return;
+
+    if (f.speed != null && f.speed >= 0) {
+      Motion.learn(f.speed);
+      if (f.speed > 3) st.vAuto = clamp(0.7 * st.vAuto + 0.3 * f.speed, 10 / 3.6, 80 / 3.6);
+    }
+    G.lastGood = f;
+    G.lastReason = '';
+
+    if (st.nav && route) {
+      if (st.mode !== 'gps') toGPS();
+      st.s = pr.s; st.anchorS = st.s;
+      if (pr.d > CFG.OFFROUTE_D) {
+        st.offStreak++;
+        if (st.offStreak >= 3) { st.offStreak = 0; reroute([f.lat, f.lon]); }
+      } else st.offStreak = 0;
+    }
+    if (!st.nav || st.mode === 'gps') {
+      drawPos([f.lat, f.lon], f.acc || 20, 'gps');
+      if (!st.nav && !st.centered) { st.centered = true; map.setView([f.lat, f.lon], 15); }
+    }
+  }
+
+  function toDR(reason) {
+    st.mode = 'dr'; st.anchorS = st.s; st.capT = 0;
+    say('Сигнал GPS недостоверен. Веду по датчикам.');
+    toast('GPS: ' + reason + '. Перехожу на датчики', 4000);
+  }
+  function toGPS() {
+    st.mode = 'gps';
+    say('GPS восстановлен');
+  }
+
+  // ---------- Повороты и остановки ----------
+  const Cal = { open: false, last: '' };
+
+  function onTurn(deg) {
+    Cal.last = (deg > 0 ? '↺ влево ' : '↻ вправо ') + Math.round(Math.abs(deg)) + '°';
+    if (!st.nav || !route || st.mode !== 'dr') return;
+    const t = NC.matchTurn(route.turns, { s: st.s, anchorS: st.anchorS, lastTurnS: st.lastTurnS }, deg);
+    if (t) {
+      st.s = Math.min(t.s + 15, route.total); st.anchorS = st.s; st.lastTurnS = t.s; st.capT = 0;
+      haptic('light'); toast('Поворот распознан ✓', 1500);
+      $('offroute').classList.add('hidden');
+    } else if (Math.abs(deg) >= 60) {
+      $('offText').textContent = 'Поворот ' + (deg > 0 ? 'налево' : 'направо') + ' не по маршруту. Вы свернули?';
+      $('offroute').classList.remove('hidden');
+      say('Похоже, вы свернули с маршрута');
+    }
+  }
+
+  function onMotionChange(moving) {
+    if (moving || !st.nav || !route || st.mode !== 'dr' || st.speedMode === 'jam') return;
+    const sig = route.signals || [];
+    let best = null, bestD = Infinity;
+    for (const x of sig) {
+      if (x < st.s - 60 || x > st.s + 120) continue;
+      if (x <= st.lastTurnS + 15) continue;
+      const d = Math.abs(x - (st.s + 30));
+      if (d < bestD) { bestD = d; best = x; }
+    }
+    if (best == null || best === st.lastSnapSig) return;
+    const target = best - 15;
+    st.s += 0.7 * (target - st.s);
+    st.anchorS = st.s; st.lastSnapSig = best;
+    toast('Остановка у светофора — позиция уточнена', 2000);
+  }
+
+  // ---------- Маршрут ----------
+  async function fetchJSON(url, opts, ms) {
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), ms || 15000);
+    try {
+      const r = await fetch(url, Object.assign({ signal: ctl.signal }, opts || {}));
+      if (!r.ok) throw new Error('сервер ответил ' + r.status);
+      return await r.json();
+    } finally { clearTimeout(tm); }
+  }
+
+  async function fetchRoute(from, to) {
+    const url = CFG.OSRM + from[1] + ',' + from[0] + ';' + to[1] + ',' + to[0] +
+      '?overview=false&steps=true&geometries=geojson&alternatives=false';
+    const j = await fetchJSON(url, null, 20000);
+    return NC.buildRoute(j, { turnMinDeg: CFG.TURN_MIN_DEG });
+  }
+
+  async function loadSignals(rt) {
+    const step = rt.total > 20000 ? 60 : 30;
+    const c = [];
+    for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
+    const q = '[out:json][timeout:25];node[highway=traffic_signals](around:20,' + c.join(',') + ');out;';
+    const j = await fetchJSON(CFG.OVERPASS, {
+      method: 'POST', body: 'data=' + encodeURIComponent(q),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    }, 30000);
+    if (rt !== route) return;
+    rt.signals = NC.clusterSignals(rt, j.elements || []);
+    signalLayer.clearLayers();
+    for (const s of rt.signals) {
+      L.circleMarker(NC.pointAt(rt, s), { radius: 4, weight: 1, color: '#fff', fillColor: '#d33', fillOpacity: 1 }).addTo(signalLayer);
+    }
+    toast('Светофоров на маршруте: ' + rt.signals.length, 2500);
+  }
+
+  function setRoute(rt, fit) {
+    route = rt;
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(rt.pts, { color: '#1f7ae0', weight: 6, opacity: 0.8 }).addTo(map);
+    signalLayer.clearLayers();
+    if (fit) map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
+    st.s = 0; st.anchorS = 0; st.lastTurnS = -1e9; st.spoken = {}; st.capT = 0; st.lastSnapSig = null; st.arrived = false;
+    loadSignals(rt).catch(() => toast('Светофоры не загрузились — подсказки будут по расстоянию', 3000));
+  }
+
+  async function reroute(from, force) {
+    if (!st.dest) return;
+    if (!force && Date.now() - st.lastReroute < 8000) return;
+    st.lastReroute = Date.now();
+    try {
+      $('instr').textContent = 'Перестраиваю маршрут…';
+      setRoute(await fetchRoute(from, st.dest), false);
+      say('Маршрут перестроен');
+    } catch (e) {
+      toast('Не удалось перестроить: ' + e.message, 4000);
+    }
+  }
+
+  function setDest(p, name) {
+    st.dest = p; st.destName = name || 'Точка на карте';
+    if (destMarker) map.removeLayer(destMarker);
+    destMarker = L.marker(p).addTo(map).bindTooltip('Куда', { permanent: true, direction: 'top' });
+    $('dest').value = st.destName; $('results').innerHTML = '';
+    $('instr').textContent = 'Готово к поездке';
+    $('sub').textContent = st.destName;
+  }
+  function setStart(p) {
+    st.start = p;
+    if (startMarker) map.removeLayer(startMarker);
+    startMarker = L.circleMarker(p, { radius: 8, color: '#0a0', fillColor: '#0c0', fillOpacity: 1 }).addTo(map)
+      .bindTooltip('Откуда', { permanent: true, direction: 'top' });
+    toast('Точка старта отмечена', 1500);
+  }
+
+  async function go() {
+    initAudio();
+    await Sensors.ensure();
+    if (!st.dest) { toast('Сначала выберите, куда едем'); return; }
+    const from = st.start || (freshGood() ? [G.lastGood.lat, G.lastGood.lon] : null);
+    if (!from) {
+      toast('GPS недоступен — нажмите на карте, откуда едем', 4000);
+      st.pick = 'start'; return;
+    }
+    $('instr').textContent = 'Строю маршрут…'; $('sub').textContent = '';
+    let rt;
+    try { rt = await fetchRoute(from, st.dest); }
+    catch (e) { toast('Маршрут не построен: ' + e.message, 4000); $('instr').textContent = 'Куда едем?'; return; }
+    st.nav = true;
+    st.mode = (!st.start && freshGood()) ? 'gps' : 'dr';
+    setRoute(rt, true);
+    st.follow = true;
+    map.setView(from, 17);
+    $('setup').classList.add('hidden'); $('drive').classList.remove('hidden');
+    requestWake();
+    say(st.mode === 'gps' ? 'Маршрут построен. Поехали.' : 'Маршрут построен. Веду по датчикам.');
+  }
+
+  function stopNav() {
+    st.nav = false; st.mode = 'none'; route = null;
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    signalLayer.clearLayers();
+    st.start = null; if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+    $('drive').classList.add('hidden'); $('setup').classList.remove('hidden');
+    $('instr').textContent = 'Куда едем?'; $('sub').textContent = 'Введите адрес назначения внизу';
+    try { if (wakeLock) wakeLock.release(); } catch (e) {}
+    try { if (hasSpeech) speechSynthesis.cancel(); } catch (e) {}
+  }
+
+  function hereAt(p) {
+    if (!route) return;
+    const pr = NC.project(route, p, st.s);
+    if (pr.d < 80) {
+      st.s = pr.s; st.anchorS = st.s; st.capT = 0;
+      let last = -1e9;
+      for (const t of route.turns) if (t.s < st.s - 10) last = t.s;
+      st.lastTurnS = last;
+      toast('Позиция уточнена ✓', 1500);
+    } else {
+      reroute(p, true);
+    }
+  }
+
+  function turnDone() {
+    if (!route) return;
+    const nt = route.turns.find(t => t.s > st.lastTurnS + 20);
+    if (!nt) return;
+    st.s = Math.min(nt.s + 15, route.total); st.anchorS = st.s; st.lastTurnS = nt.s; st.capT = 0;
+    toast('Позиция перенесена за поворот', 1500);
+  }
+
+  // ---------- Основной цикл ----------
+  function curSpeed() {
+    return st.speedMode === 'auto' ? st.vAuto : CFG.SPEEDS[st.speedMode] / 3.6;
+  }
+
+  let lastTick = performance.now();
+  function tick() {
+    const now = performance.now();
+    const dt = Math.min(1, (now - lastTick) / 1000);
+    lastTick = now;
+
+    if (st.nav && route) {
+      if (st.mode === 'dr') {
+        const v = Motion.moving ? curSpeed() : 0;
+        let ns = st.s + v * dt;
+        const nt = route.turns.find(t => t.s > st.lastTurnS + 20);
+        if (nt && ns >= nt.s + CFG.TURN_OVERSHOOT) {
+          ns = Math.max(st.s, nt.s + CFG.TURN_OVERSHOOT);
+          if (Motion.moving) {
+            st.capT += dt * 1000;
+            if (st.capT > CFG.CAP_RELEASE_MS) {
+              st.lastTurnS = nt.s; st.capT = 0;
+              toast('Поворот не распознан. Если позиция неверна — «Я здесь»', 5000);
+            }
+          }
+        } else st.capT = 0;
+        st.s = Math.min(ns, route.total);
+      } else {
+        for (const t of route.turns) if (t.s < st.s - 10 && t.s > st.lastTurnS) st.lastTurnS = t.s;
+      }
+
+      const p = NC.pointAt(route, st.s);
+      if (st.mode === 'dr') {
+        const unc = Math.max(30, 30 + 0.15 * (st.s - st.anchorS));
+        drawPos(p, unc, 'dr');
+      }
+      if (st.follow && now - st.lastPan > 800) {
+        st.lastPan = now;
+        const c = st.mode === 'gps' && G.lastGood ? [G.lastGood.lat, G.lastGood.lon] : p;
+        map.panTo(c, { animate: true, duration: 0.5 });
+      }
+      updateGuidance();
+    }
+    updateStatus();
+    if (Cal.open) updateCal();
+  }
+  setInterval(tick, 200);
+
+  function nextStepIdx() {
+    for (let i = 1; i < route.steps.length; i++) {
+      const s = route.steps[i];
+      if (s.s > st.s + 5 && s.announce) return i;
+    }
+    return route.steps.length - 1;
+  }
+
+  function lowerFirst(s) { return s ? s[0].toLowerCase() + s.slice(1) : s; }
+  function upperFirst(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+
+  function updateGuidance() {
+    const i = nextStepIdx(), stp = route.steps[i];
+    const d = Math.max(0, stp.s - st.s);
+    const dr = st.mode === 'dr';
+    const lm = NC.landmark(route.signals, st.s, stp.s);
+
+    if (stp.type === 'arrive' && d < 30) {
+      $('instr').textContent = 'Вы приехали';
+      $('sub').textContent = st.destName;
+      if (!st.arrived) { st.arrived = true; say('Вы приехали'); }
+      return;
+    }
+    $('instr').textContent = stp.text;
+    $('sub').textContent = NC.fmtDist(d, dr) + (lm ? ' · ' + lm : '');
+
+    const farD = dr ? 700 : 500, nearD = dr ? 150 : 120;
+    if (d <= farD && d > nearD + 80 && !st.spoken[i + 'f']) {
+      st.spoken[i + 'f'] = true;
+      const phrase = (dr && lm)
+        ? upperFirst(lm) + ' — ' + lowerFirst(stp.text)
+        : 'Через ' + NC.fmtDist(d, false).replace(' м', ' метров').replace(' км', ' километра') + ' ' + lowerFirst(stp.text);
+      say(phrase);
+    }
+    if (d <= nearD && !st.spoken[i + 'n']) {
+      st.spoken[i + 'n'] = true; st.spoken[i + 'f'] = true;
+      say(stp.text);
+    }
+  }
+
+  function updateStatus() {
+    const el = $('status');
+    let txt, cls;
+    if (st.nav) {
+      if (st.mode === 'gps') { txt = '🛰 GPS в норме'; cls = 'st-gps'; }
+      else { txt = '🧭 По датчикам' + (G.lastReason ? ' · GPS: ' + G.lastReason : ''); cls = 'st-dr'; }
+    } else if (G.denied) { txt = 'Нет доступа к геопозиции — нажмите'; cls = 'st-bad'; }
+    else if (freshGood()) { txt = '🛰 GPS в норме'; cls = 'st-gps'; }
+    else if (G.lastReason) { txt = 'GPS недостоверен: ' + G.lastReason; cls = 'st-bad'; }
+    else { txt = 'Ищу местоположение…'; cls = ''; }
+    el.textContent = txt; el.className = 'pill ' + cls;
+
+    const m = $('motion');
+    if (Sensors.started) {
+      m.classList.remove('hidden');
+      m.textContent = Motion.moving ? '● едем' : '○ стоим';
+    }
+  }
+
+  function updateCal() {
+    const deg = Motion.yawRate * 180 / Math.PI;
+    $('calYaw').textContent = Math.abs(deg) > 10 ? (deg > 0 ? '↺ влево' : '↻ вправо') : (Cal.last || '—');
+    $('calInfo').textContent =
+      'Датчики: ' + (Sensors.kind || 'не запущены') +
+      ' · вибрация ' + Motion.std.toFixed(3) + ' (порог ' + Motion.threshold().toFixed(3) + ')' +
+      ' · ' + (Motion.moving ? 'едем' : 'стоим') +
+      ' · направление ' + (Motion.invert ? 'инвертировано' : 'обычное') +
+      (Motion.up() ? '' : ' · ориентация телефона не определена');
+  }
+
+  // ---------- Поиск адреса ----------
+  let searchT = null;
+  $('dest').addEventListener('input', () => {
+    clearTimeout(searchT);
+    const q = $('dest').value.trim();
+    if (q.length < 3) { $('results').innerHTML = ''; return; }
+    searchT = setTimeout(async () => {
+      try {
+        const url = CFG.NOMINATIM + '?format=jsonv2&limit=5&countrycodes=ua&accept-language=ru,uk' +
+          '&viewbox=30.2,50.6,30.85,50.2&bounded=0&q=' + encodeURIComponent(q);
+        const arr = await fetchJSON(url, null, 10000);
+        const box = $('results'); box.innerHTML = '';
+        if (!arr.length) { box.innerHTML = '<div>Ничего не найдено</div>'; return; }
+        for (const r of arr) {
+          const d = document.createElement('div');
+          d.textContent = r.display_name.split(',').slice(0, 4).join(',');
+          d.onclick = () => {
+            const p = [parseFloat(r.lat), parseFloat(r.lon)];
+            setDest(p, d.textContent); map.setView(p, 15);
+          };
+          box.appendChild(d);
+        }
+      } catch (e) { $('results').innerHTML = '<div>Поиск недоступен — выберите точку на карте</div>'; }
+    }, 600);
+  });
+
+  // ---------- Кнопки ----------
+  map.on('click', e => {
+    if (!st.pick) return;
+    const p = [e.latlng.lat, e.latlng.lng];
+    const mode = st.pick; st.pick = null;
+    if (mode === 'dest') setDest(p, 'Точка на карте');
+    else if (mode === 'start') setStart(p);
+    else if (mode === 'here') hereAt(p);
+  });
+
+  $('btnPickDest').onclick = () => { st.pick = 'dest'; toast('Нажмите на карте, куда едем'); };
+  $('btnPickStart').onclick = () => { st.pick = 'start'; toast('Нажмите на карте, откуда едем'); };
+  $('btnGo').onclick = go;
+  $('btnStop').onclick = stopNav;
+  $('btnTurnDone').onclick = turnDone;
+  $('btnHere').onclick = () => { st.pick = 'here'; st.follow = false; toast('Нажмите на карте, где вы сейчас', 4000); };
+  $('btnFollow').onclick = () => { st.follow = true; st.lastPan = 0; };
+  $('btnOffYes').onclick = () => { $('offroute').classList.add('hidden'); $('btnHere').onclick(); };
+  $('btnOffNo').onclick = () => { $('offroute').classList.add('hidden'); };
+  $('status').onclick = () => {
+    if (G.denied && tgv('8.0') && W.LocationManager) { try { W.LocationManager.openSettings(); } catch (e) {} }
+  };
+  document.querySelectorAll('#speedRow button').forEach(b => {
+    b.onclick = () => {
+      st.speedMode = b.dataset.sp;
+      document.querySelectorAll('#speedRow button').forEach(x => x.classList.toggle('on', x === b));
+    };
+  });
+  const openCal = async () => { initAudio(); await Sensors.ensure(); Cal.open = true; $('calib').classList.remove('hidden'); };
+  $('btnCalib').onclick = openCal;
+  $('btnCalib2').onclick = openCal;
+  $('btnCalClose').onclick = () => { Cal.open = false; $('calib').classList.add('hidden'); };
+  $('btnInvert').onclick = () => {
+    Motion.invert = !Motion.invert; store.set('nav_invert', Motion.invert ? '1' : '0'); Cal.last = '';
+  };
+
+  Loc.start();
+  if (!inTg) toast('Открыто вне Telegram — работает в упрощённом режиме', 3000);
+})();
+</script>
+</body>
+</html>
