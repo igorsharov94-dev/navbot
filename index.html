@@ -68,6 +68,7 @@
   </div>
   <div class="row">
     <button id="btnGo" class="primary">Поїхали</button>
+    <button class="btnSound" style="flex:0 0 52px">🔊</button>
     <button id="btnCalib" style="flex:0 0 52px">⚙</button>
   </div>
   <div id="setupHint" class="hint">Порада: будуйте маршрут, поки GPS ще працює. Телефон — у тримачі.</div>
@@ -87,6 +88,7 @@
   <div class="row">
     <button id="btnFollow">Центр</button>
     <button id="btnStop">Завершити</button>
+    <button class="btnSound" style="flex:0 0 52px">🔊</button>
     <button id="btnCalib2" style="flex:0 0 52px">⚙</button>
   </div>
 </div>
@@ -117,11 +119,31 @@
   'use strict';
   const NC = window.NavCore;
 
+  // ---------- Статистика (GoatCounter) ----------
+  // Впишіть свій код з goatcounter.com, наприклад 'kyivnav'. Порожньо — статистика вимкнена.
+  // Координати й адреси НЕ надсилаються — лише факт події.
+  const STATS_CODE = 'kyivnav2026';
+  if (STATS_CODE) {
+    window.goatcounter = { no_onload: true, allow_frame: true }; // у Telegram Web застосунок відкривається у фреймі
+    const gs = document.createElement('script');
+    gs.async = true; gs.src = 'https://gc.zgo.at/count.js';
+    gs.dataset.goatcounter = 'https://' + STATS_CODE + '.goatcounter.com/count';
+    gs.onload = () => track('open', 'Відкрили навігатор', false);
+    document.head.appendChild(gs);
+  }
+  function track(path, title, isEvent) {
+    try {
+      if (window.goatcounter && window.goatcounter.count) {
+        window.goatcounter.count({ path, title, event: isEvent !== false });
+      }
+    } catch (e) {}
+  }
+
   const CFG = {
     OSRM: 'https://router.project-osrm.org/route/v1/driving/',
     NOMINATIM: 'https://nominatim.openstreetmap.org/search',
     OVERPASS: 'https://overpass-api.de/api/interpreter',
-    SPEEDS: { jam: 10, city: 30, avenue: 50 },   // км/ч
+    SPEEDS: { jam: 7, city: 22, avenue: 40 },    // км/год — середня з урахуванням світлофорів
     GPS_MAX_ACC: 80,        // м — хуже этой точности не верим
     GPS_MAX_SPEED: 160,     // км/ч — быстрее «едет» только подмена
     GPS_BACK_MAXD: 80,      // м — в режиме датчиков принимаем GPS только рядом с маршрутом
@@ -131,9 +153,10 @@
     TURN_END: 0.05,         // рад/с — конец поворота
     TURN_END_MS: 1200,
     TURN_MIN_DEG: 40,
-    TURN_OVERSHOOT: 60,     // м — дальше нераспознанного поворота расчёт не уходит
-    CAP_RELEASE_MS: 25000,
-    STOP_STD: 0.10          // м/с² — вибрация, ниже которой считаем, что стоим
+    TURN_OVERSHOOT: 25,     // м — далі нерозпізнаного повороту розрахунок не йде
+    CAP_RELEASE_MS: 90000,  // чекаємо поворот до 1,5 хв, краще відстати, ніж забігти вперед
+    AUTO_FACTOR: 0.8,       // у режимі «Авто» беремо 80% середньої швидкості
+    STOP_STD: 0.18          // м/с² — вибрация, ниже которой считаем, что стоим
   };
 
   // ---------- Telegram ----------
@@ -188,10 +211,18 @@
     } catch (e) {}
   }
   const hasSpeech = 'speechSynthesis' in window;
+  // Звук: 'voice' — голос, 'beep' — лише сигнал і вібрація, 'off' — тиша (лише вібрація)
+  const SOUND_MODES = {
+    voice: { icon: '🔊', label: 'Голос увімкнено' },
+    beep: { icon: '🔔', label: 'Лише звуковий сигнал' },
+    off: { icon: '🔇', label: 'Звук вимкнено' }
+  };
+  let soundMode = SOUND_MODES[store.get('nav_sound')] ? store.get('nav_sound') : 'voice';
   function say(text) {
-    beep();
     haptic();
-    if (!hasSpeech) return;
+    if (soundMode === 'off') return;
+    beep();
+    if (soundMode !== 'voice' || !hasSpeech) return;
     try {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'uk-UA'; u.rate = 1.05;
@@ -231,7 +262,7 @@
   const st = {
     nav: false, mode: 'none',          // 'gps' | 'dr' (датчики)
     s: 0, anchorS: 0, lastTurnS: -1e9, // положение вдоль маршрута, м
-    follow: true, speedMode: 'auto', vAuto: 30 / 3.6,
+    follow: true, speedMode: 'auto', vAuto: 22 / 3.6, track: [],
     pick: null, start: null, dest: null, destName: '',
     spoken: {}, offStreak: 0, lastReroute: 0, capT: 0, lastSnapSig: null,
     arrived: false, lastPan: 0
@@ -418,7 +449,12 @@
       if (dt > 0 && d > 150 && d / dt * 3.6 > CFG.GPS_MAX_SPEED) reasons.push('стрибок координат');
       if (d < 3) { if (!G.staticSince) G.staticSince = ref.t; } else G.staticSince = 0;
     }
-    if (G.staticSince && f.t - G.staticSince > 12000 && Motion.moving && Motion.movingFor() > 10000) {
+    // «Застигли»: лише якщо машина реально їхала за GPS, а потім точка завмерла,
+    // і датчики довго бачать рух. Телефон у руці або вдома так не спрацює.
+    const wasDriving = G.lastGood && G.lastGood.speed != null && G.lastGood.speed > 3 &&
+      f.t - G.lastGood.t < 60000;
+    if (G.staticSince && f.t - G.staticSince > 15000 && wasDriving && !Cal.open &&
+        Motion.moving && Motion.movingFor() > 15000) {
       reasons.push('координати застигли, а машина їде');
     }
     if (!reasons.length && G.lastGood) {
@@ -442,8 +478,8 @@
 
     if (f.speed != null && f.speed >= 0) {
       Motion.learn(f.speed);
-      if (f.speed > 3) st.vAuto = clamp(0.7 * st.vAuto + 0.3 * f.speed, 10 / 3.6, 80 / 3.6);
     }
+    updateAvgSpeed(f);
     G.lastGood = f;
     G.lastReason = '';
 
@@ -462,6 +498,7 @@
   }
 
   function toDR(reason) {
+    track('gps-lost', 'GPS втрачено, перехід на датчики');
     st.mode = 'dr'; st.anchorS = st.s; st.capT = 0;
     say('Сигнал GPS недостовірний. Веду за датчиками.');
     toast('GPS: ' + reason + '. Переходжу на датчики', 4000);
@@ -601,6 +638,7 @@
     map.setView(from, 17);
     $('setup').classList.add('hidden'); $('drive').classList.remove('hidden');
     requestWake();
+    track(st.mode === 'gps' ? 'route-gps' : 'route-nogps', st.mode === 'gps' ? 'Маршрут (з GPS)' : 'Маршрут (без GPS)');
     say(st.mode === 'gps' ? 'Маршрут побудовано. Поїхали.' : 'Маршрут побудовано. Веду за датчиками.');
   }
 
@@ -638,8 +676,24 @@
   }
 
   // ---------- Основной цикл ----------
+  // Середня швидкість за останні 3 хв за справжнім GPS, разом із зупинками.
+  // Миттєва швидкість (50–60 км/год) завищує розрахунок у місті вдвічі.
+  function updateAvgSpeed(f) {
+    st.track.push([f.t, f.lat, f.lon]);
+    while (st.track.length && f.t - st.track[0][0] > 180000) st.track.shift();
+    if (st.track.length < 5) return;
+    const span = (f.t - st.track[0][0]) / 1000;
+    if (span < 60) return;
+    let d = 0;
+    for (let i = 1; i < st.track.length; i++) {
+      const seg = NC.dist([st.track[i - 1][1], st.track[i - 1][2]], [st.track[i][1], st.track[i][2]]);
+      if (seg >= 5) d += seg;  // дрижання GPS на місці не рахуємо
+    }
+    st.vAuto = clamp(d / span, 8 / 3.6, 50 / 3.6);
+  }
+
   function curSpeed() {
-    return st.speedMode === 'auto' ? st.vAuto : CFG.SPEEDS[st.speedMode] / 3.6;
+    return st.speedMode === 'auto' ? st.vAuto * CFG.AUTO_FACTOR : CFG.SPEEDS[st.speedMode] / 3.6;
   }
 
   let lastTick = performance.now();
@@ -659,7 +713,7 @@
             st.capT += dt * 1000;
             if (st.capT > CFG.CAP_RELEASE_MS) {
               st.lastTurnS = nt.s; st.capT = 0;
-              toast('Поворот не розпізнано. Якщо позиція неправильна — «Я тут»', 5000);
+              toast('Поворот не розпізнано. Натисніть «Проїхав поворот» або «Я тут»', 5000);
             }
           }
         } else st.capT = 0;
@@ -705,7 +759,7 @@
     if (stp.type === 'arrive' && d < 30) {
       $('instr').textContent = 'Ви приїхали';
       $('sub').textContent = st.destName;
-      if (!st.arrived) { st.arrived = true; say('Ви приїхали'); }
+      if (!st.arrived) { st.arrived = true; say('Ви приїхали'); track('arrived', 'Доїхали до місця'); }
       return;
     }
     $('instr').textContent = stp.text;
@@ -740,7 +794,9 @@
     const m = $('motion');
     if (Sensors.started) {
       m.classList.remove('hidden');
-      m.textContent = Motion.moving ? '● їдемо' : '○ стоїмо';
+      m.textContent = Motion.moving
+        ? '● їдемо' + (st.nav && st.mode === 'dr' ? ' · ≈' + Math.round(curSpeed() * 3.6) + ' км/год' : '')
+        : '○ стоїмо';
     }
   }
 
@@ -812,6 +868,20 @@
   const openCal = async () => { initAudio(); await Sensors.ensure(); Cal.open = true; $('calib').classList.remove('hidden'); };
   $('btnCalib').onclick = openCal;
   $('btnCalib2').onclick = openCal;
+  function renderSound() {
+    document.querySelectorAll('.btnSound').forEach(b => { b.textContent = SOUND_MODES[soundMode].icon; });
+  }
+  document.querySelectorAll('.btnSound').forEach(b => {
+    b.onclick = () => {
+      initAudio();
+      soundMode = soundMode === 'voice' ? 'beep' : soundMode === 'beep' ? 'off' : 'voice';
+      store.set('nav_sound', soundMode);
+      if (soundMode !== 'voice') { try { if (hasSpeech) speechSynthesis.cancel(); } catch (e) {} }
+      renderSound();
+      toast(SOUND_MODES[soundMode].label, 1500);
+    };
+  });
+  renderSound();
   $('btnCalClose').onclick = () => { Cal.open = false; $('calib').classList.add('hidden'); };
   $('btnInvert').onclick = () => {
     Motion.invert = !Motion.invert; store.set('nav_invert', Motion.invert ? '1' : '0'); Cal.last = '';
