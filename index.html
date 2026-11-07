@@ -76,10 +76,10 @@
 
 <div id="drive" class="panel hidden">
   <div class="row" id="speedRow">
-    <button data-sp="auto" class="on">Авто</button>
-    <button data-sp="jam">Затор</button>
-    <button data-sp="city">Місто</button>
-    <button data-sp="avenue">Проспект</button>
+    <button id="spAuto" class="on" style="flex:0 0 70px">Авто</button>
+    <button id="spMinus" style="flex:0 0 52px;font-size:22px">−</button>
+    <div id="spVal" style="flex:1 1 auto;text-align:center;align-self:center;font-size:20px;font-weight:700">22 км/год</div>
+    <button id="spPlus" style="flex:0 0 52px;font-size:22px">+</button>
   </div>
   <div class="row">
     <button id="btnTurnDone">Проїхав поворот</button>
@@ -143,7 +143,7 @@
     OSRM: 'https://router.project-osrm.org/route/v1/driving/',
     NOMINATIM: 'https://nominatim.openstreetmap.org/search',
     OVERPASS: 'https://overpass-api.de/api/interpreter',
-    SPEEDS: { jam: 7, city: 22, avenue: 40 },    // км/год — середня з урахуванням світлофорів
+    SPEED_STEP: 5, SPEED_MIN: 5, SPEED_MAX: 90,   // км/год — ручна швидкість
     GPS_MAX_ACC: 80,        // м — хуже этой точности не верим
     GPS_MAX_SPEED: 160,     // км/ч — быстрее «едет» только подмена
     GPS_BACK_MAXD: 80,      // м — в режиме датчиков принимаем GPS только рядом с маршрутом
@@ -262,7 +262,7 @@
   const st = {
     nav: false, mode: 'none',          // 'gps' | 'dr' (датчики)
     s: 0, anchorS: 0, lastTurnS: -1e9, // положение вдоль маршрута, м
-    follow: true, speedMode: 'auto', vAuto: 22 / 3.6, track: [],
+    follow: true, speedMode: 'auto', vAuto: 22 / 3.6, vManual: 20, track: [],
     pick: null, start: null, dest: null, destName: '',
     spoken: {}, offStreak: 0, lastReroute: 0, capT: 0, lastSnapSig: null,
     arrived: false, lastPan: 0
@@ -527,7 +527,7 @@
   }
 
   function onMotionChange(moving) {
-    if (moving || !st.nav || !route || st.mode !== 'dr' || st.speedMode === 'jam') return;
+    if (moving || !st.nav || !route || st.mode !== 'dr' || (st.speedMode === 'manual' && st.vManual <= 10)) return;
     const sig = route.signals || [];
     let best = null, bestD = Infinity;
     for (const x of sig) {
@@ -693,7 +693,7 @@
   }
 
   function curSpeed() {
-    return st.speedMode === 'auto' ? st.vAuto * CFG.AUTO_FACTOR : CFG.SPEEDS[st.speedMode] / 3.6;
+    return st.speedMode === 'auto' ? st.vAuto * CFG.AUTO_FACTOR : st.vManual / 3.6;
   }
 
   let lastTick = performance.now();
@@ -795,7 +795,7 @@
     if (Sensors.started) {
       m.classList.remove('hidden');
       m.textContent = Motion.moving
-        ? '● їдемо' + (st.nav && st.mode === 'dr' ? ' · ≈' + Math.round(curSpeed() * 3.6) + ' км/год' : '')
+        ? '● їдемо'
         : '○ стоїмо';
     }
   }
@@ -859,12 +859,24 @@
   $('status').onclick = () => {
     if (G.denied && tgv('8.0') && W.LocationManager) { try { W.LocationManager.openSettings(); } catch (e) {} }
   };
-  document.querySelectorAll('#speedRow button').forEach(b => {
-    b.onclick = () => {
-      st.speedMode = b.dataset.sp;
-      document.querySelectorAll('#speedRow button').forEach(x => x.classList.toggle('on', x === b));
-    };
-  });
+  // Швидкість: «Авто» — за GPS-історією; «−»/«+» — вручну з кроком 5 км/год
+  function renderSpeed() {
+    $('spAuto').classList.toggle('on', st.speedMode === 'auto');
+    $('spVal').textContent = Math.round(curSpeed() * 3.6) + ' км/год';
+  }
+  function stepSpeed(dir) {
+    if (st.speedMode === 'auto') {
+      st.vManual = Math.round(curSpeed() * 3.6 / CFG.SPEED_STEP) * CFG.SPEED_STEP;
+      st.speedMode = 'manual';
+    }
+    st.vManual = clamp(st.vManual + dir * CFG.SPEED_STEP, CFG.SPEED_MIN, CFG.SPEED_MAX);
+    renderSpeed();
+  }
+  $('spMinus').onclick = () => stepSpeed(-1);
+  $('spPlus').onclick = () => stepSpeed(1);
+  $('spAuto').onclick = () => { st.speedMode = 'auto'; renderSpeed(); toast('Швидкість за історією GPS', 1500); };
+  setInterval(() => { if (st.speedMode === 'auto') renderSpeed(); }, 2000);
+  renderSpeed();
   const openCal = async () => { initAudio(); await Sensors.ensure(); Cal.open = true; $('calib').classList.remove('hidden'); };
   $('btnCalib').onclick = openCal;
   $('btnCalib2').onclick = openCal;
