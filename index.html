@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Навігатор без GPS</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="core.js"></script>
+<script src="mapview.js"></script>
 <style>
   :root {
     --bg: var(--tg-theme-bg-color, #ffffff);
@@ -56,6 +57,44 @@
   #help ol, #help ul { padding-left: 20px; margin: 4px 0; }
   #help .warn { background: #ffefc4; color: #5a3d00; border-radius: 10px; padding: 8px 10px; margin-top: 10px; }
   #help .foot { padding: 10px 14px 14px; }
+  /* ---- Маркери карти ---- */
+  .mv-pos .mv-dot { width: 20px; height: 20px; border-radius: 50%; background: #1f7ae0; border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.3); }
+  .mv-pos.dr .mv-dot { background: #e08a00; }
+  .mv-pos svg { display: block; filter: drop-shadow(0 0 6px #00e5ff); }
+  .mv-pos.dr svg path { stroke: #ffb020; }
+  .mv-pin { font-size: 26px; line-height: 1; text-align: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+  .mv-pin b { display: block; font: 600 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.6); border-radius: 6px; padding: 1px 5px; margin-top: 2px; white-space: nowrap; }
+  .mv-poi { width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 2px solid #8a4dff; display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; }
+  #fab { position: absolute; right: 10px; top: 42%; z-index: 1001; display: flex; flex-direction: column; gap: 8px; }
+  #fab button { width: 48px; height: 48px; border-radius: 50%; padding: 0; font-size: 22px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  #speedo { position: absolute; left: 14px; z-index: 1001; font-weight: 800; line-height: .9; color: #1f7ae0; text-shadow: 0 0 3px #fff, 0 0 3px #fff; pointer-events: none; }
+  #speedo .v { font-size: 56px; }
+  #speedo .u { font-size: 13px; font-weight: 700; display: block; }
+  #near { margin-top: 6px; padding: 6px 10px; border-radius: 10px; background: #f3ecff; color: #4b1a99; font-weight: 600; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+  #near .ic { font-size: 20px; }
+  #near .d { margin-left: auto; font-size: 13px; opacity: .8; }
+  /* ---- Неонова тема ---- */
+  body.neon { --bg: rgba(12, 4, 28, .9); --fg: #f6eaff; --hint: #b49ad6; --btn: #c026d3; --btnfg: #fff; --card: rgba(60, 20, 110, .55); background: #07020f; }
+  body.neon .panel { border: 1px solid rgba(255, 60, 230, .55); box-shadow: 0 0 18px rgba(255, 40, 220, .35), inset 0 0 12px rgba(120, 40, 255, .25); backdrop-filter: blur(6px); }
+  body.neon #instr { color: #fff; text-shadow: 0 0 10px rgba(255, 90, 240, .8); }
+  body.neon button { border: 1px solid rgba(160, 90, 255, .5); }
+  body.neon button.primary { background: linear-gradient(90deg, #ff2bd6, #7c3aed); box-shadow: 0 0 12px rgba(255, 43, 214, .6); border: 0; }
+  body.neon button.on { box-shadow: inset 0 0 0 2px #00e5ff, 0 0 10px rgba(0, 229, 255, .5); }
+  body.neon .pill { background: rgba(255,255,255,.08); color: #e9d8ff; border: 1px solid rgba(160,90,255,.5); }
+  body.neon .st-gps { color: #5dffb0; border-color: #5dffb0; }
+  body.neon .st-dr { color: #ffc94d; border-color: #ffc94d; }
+  body.neon .st-bad { color: #ff6b8a; border-color: #ff6b8a; }
+  body.neon input { background: rgba(0,0,0,.35); border-color: #7c3aed; }
+  body.neon #results div { border-color: rgba(160,90,255,.3); }
+  body.neon #speedo { color: #3ad8ff; text-shadow: 0 0 8px #00a8ff, 0 0 18px #0077ff; }
+  body.neon #speedo .u { color: #7fe7ff; }
+  body.neon #near { background: rgba(0, 229, 255, .12); color: #9ff6ff; border: 1px solid rgba(0,229,255,.6); box-shadow: 0 0 12px rgba(0,229,255,.35); }
+  body.neon .mv-poi { background: #12052a; border-color: #ff2bd6; box-shadow: 0 0 10px #ff2bd6; }
+  body.neon #fab button { background: rgba(12,4,28,.9); border: 1px solid #ff2bd6; box-shadow: 0 0 12px rgba(255,43,214,.5); }
+  body.neon #help { background: #0c041c; }
+  body.neon #help .warn { background: rgba(255, 201, 77, .15); color: #ffd98a; }
+  body.neon .maplibregl-ctrl-attrib { background: rgba(0,0,0,.5) !important; color: #aaa; }
+  body.neon .maplibregl-ctrl-attrib a { color: #ccc; }
   .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; vertical-align: -1px; box-shadow: 0 0 0 1px #999; }
 </style>
 </head>
@@ -66,6 +105,14 @@
   <div id="instr">Куди їдемо?</div>
   <div id="sub">Введіть адресу призначення внизу</div>
   <div class="pills"><span id="status" class="pill">Шукаю місцезнаходження…</span><span id="motion" class="pill hidden"></span></div>
+  <div id="near" class="hidden"></div>
+</div>
+
+<div id="speedo" class="hidden"><span class="v">0</span><span class="u">км/год</span></div>
+
+<div id="fab">
+  <button id="btnTheme" title="Вигляд карти">🌃</button>
+  <button id="btnPoi" title="Місця поруч">🛒</button>
 </div>
 
 <div id="setup" class="panel">
@@ -123,6 +170,16 @@
   </div>
 </div>
 
+<div id="pinModal" class="panel modal hidden">
+  <b id="pinTitle">Мітка</b>
+  <div id="pinInfo" class="hint"></div>
+  <div class="row">
+    <button id="pinGo" class="primary">Поїхати сюди</button>
+    <button id="pinDel">Видалити</button>
+  </div>
+  <div class="row"><button id="pinClose">Закрити</button></div>
+</div>
+
 <div id="help" class="panel hidden">
   <div class="body">
     <h2>Як користуватися навігатором</h2>
@@ -148,6 +205,8 @@
       <li><span class="dot" style="background:#1f7ae0"></span> <b>Синя точка</b>, «🛰 GPS у нормі» — точна позиція.</li>
       <li><span class="dot" style="background:#e08a00"></span> <b>Помаранчева точка</b>, «🧭 За датчиками» — GPS збитий, позиція приблизна. Коло навколо — можлива похибка.</li>
       <li><b>Червоні точки</b> на маршруті — світлофори.</li>
+      <li><b>Велике число зліва внизу</b> — швидкість. Зі знаком «≈» — розрахункова, коли GPS немає.</li>
+      <li><b>Значки</b> 🛒 💊 ⛽ 🛡 — магазини, аптеки, заправки й укриття вздовж маршруту. Найближче з’являється у плашці «поруч».</li>
       <li>Вгорі — наступний маневр, наприклад «на 2-му світлофорі праворуч».</li>
     </ul>
 
@@ -159,14 +218,23 @@
       <li><b>Центр</b> — знову стежити за машиною.</li>
       <li><b>🔊 / 🔔 / 🔇</b> — голос, лише сигнал або тиша.</li>
       <li><b>Завершити</b> — закінчити поїздку.</li>
+      <li><b>🌃 / 🗺</b> праворуч на мапі — неонова 3D-карта або звичайна. Якщо телефон гальмує — оберіть звичайну.</li>
+      <li><b>🛒</b> праворуч на мапі — показати або сховати місця вздовж маршруту.</li>
     </ul>
 
-    <h3>5. Важливо</h3>
+    <h3>5. Мітки</h3>
+    <ul>
+      <li>Утримуйте палець на мапі ~1 секунду — з’явиться <b>📌 мітка</b>. Мітки зберігаються на телефоні.</li>
+      <li>Торкніться мітки, щоб поїхати до неї або видалити.</li>
+    </ul>
+
+    <h3>6. Важливо</h3>
     <ul>
       <li><b>Не згортайте</b> навігатор і не вимикайте екран — інакше датчики зупиняться.</li>
       <li>Після кожного повороту з’являється «Поворот розпізнано ✓» — позиція знову точна.</li>
       <li>На довгих прямих без поворотів точка може зміщуватися — поправте кнопкою «Я тут».</li>
       <li>На Android голос у Telegram може не працювати — тоді будуть сигнал і вібрація.</li>
+      <li>Укриття беруться з OpenStreetMap і можуть бути неповними — орієнтуйтеся на офіційні карти укриттів.</li>
     </ul>
     <div class="warn">⚠️ Водію не торкатися екрана під час руху — кнопки для пасажира. Навігатор допоміжний: стежте за дорогою і знаками.</div>
   </div>
@@ -299,24 +367,34 @@
     if (document.visibilityState === 'visible' && st.nav) requestWake();
   });
 
-  // ---------- Карта ----------
-  const map = L.map('map', { zoomControl: false }).setView([50.4501, 30.5234], 12);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© OpenStreetMap'
-  }).addTo(map);
-  let routeLine = null, posMarker = null, accCircle = null, startMarker = null, destMarker = null;
-  const signalLayer = L.layerGroup().addTo(map);
-  map.on('dragstart', () => { st.follow = false; });
+  // ---------- Карта (MapLibre: «Класика» або «Неон 3D») ----------
+  const MV = window.MapView;
+  if (!MV.supported()) toast('Телефон не підтримує 3D-графіку — мапа може не показуватися', 6000);
+  let theme = store.get('nav_theme') === 'classic' ? 'classic' : 'neon';
+  MV.init('map', theme, [50.4501, 30.5234]);
+  MV.on('userMove', () => { st.follow = false; });
 
+  // Курс уздовж маршруту — працює і без GPS, бо позицію на маршруті ми знаємо
+  let camBearing = null;
+  function routeBearing() {
+    if (!route) return null;
+    const a = NC.pointAt(route, Math.max(0, st.s - 10)), b = NC.pointAt(route, Math.min(route.total, st.s + 30));
+    if (NC.dist(a, b) < 5) return camBearing;
+    const target = NC.bearing(a, b);
+    if (camBearing == null) camBearing = target;
+    else camBearing = (camBearing + NC.norm180(target - camBearing) * 0.5 + 360) % 360;
+    return camBearing;
+  }
   function drawPos(p, r, kind) {
-    const color = kind === 'gps' ? '#1f7ae0' : '#e08a00';
-    if (!posMarker) {
-      posMarker = L.circleMarker(p, { radius: 9, weight: 3, color: '#fff', fillColor: color, fillOpacity: 1 }).addTo(map);
-      accCircle = L.circle(p, { radius: r, weight: 1, color, fillColor: color, fillOpacity: 0.12 }).addTo(map);
-    } else {
-      posMarker.setLatLng(p); posMarker.setStyle({ fillColor: color });
-      accCircle.setLatLng(p); accCircle.setRadius(r); accCircle.setStyle({ color, fillColor: color });
-    }
+    MV.drawPos(p, r, kind, st.nav && route ? camBearing : null);
+  }
+  function camPadding() {
+    const top = $('top').offsetHeight + 8;
+    const bottom = st.nav ? $('drive').offsetHeight + 8 : $('setup').offsetHeight + 8;
+    // У неоні машина внизу екрана (≈62% висоти), щоб бачити дорогу попереду
+    return theme === 'neon' && st.nav
+      ? { top: Math.max(top, Math.round(window.innerHeight * 0.45)), bottom, left: 0, right: 0 }
+      : { top, bottom, left: 0, right: 0 };
   }
 
   // ---------- Состояние ----------
@@ -554,7 +632,7 @@
     }
     if (!st.nav || st.mode === 'gps') {
       drawPos([f.lat, f.lon], f.acc || 20, 'gps');
-      if (!st.nav && !st.centered) { st.centered = true; map.setView([f.lat, f.lon], 15); }
+      if (!st.nav && !st.centered) { st.centered = true; MV.setView([f.lat, f.lon], 15); }
     }
   }
 
@@ -633,21 +711,89 @@
     }, 30000);
     if (rt !== route) return;
     rt.signals = NC.clusterSignals(rt, j.elements || []);
-    signalLayer.clearLayers();
-    for (const s of rt.signals) {
-      L.circleMarker(NC.pointAt(rt, s), { radius: 4, weight: 1, color: '#fff', fillColor: '#d33', fillOpacity: 1 }).addTo(signalLayer);
-    }
+    MV.setSignals(rt.signals.map(s => NC.pointAt(rt, s)));
     toast('Світлофорів на маршруті: ' + rt.signals.length, 2500);
   }
 
+  // ---------- Місця вздовж маршруту ----------
+  const POI_TYPES = [
+    { icon: '🛒', label: 'Магазин', test: t => /^(supermarket|convenience)$/.test(t.shop || '') },
+    { icon: '💊', label: 'Аптека', test: t => t.amenity === 'pharmacy' },
+    { icon: '⛽', label: 'Заправка', test: t => t.amenity === 'fuel' },
+    { icon: '🛡', label: 'Укриття', test: t => t.military === 'bunker' || t.building === 'bunker' || /basement|bunker|air_raid/.test(t.shelter_type || '') }
+  ];
+  let showPois = store.get('nav_pois') !== '0';
+  async function loadPois(rt) {
+    const step = rt.total > 20000 ? 120 : 60;
+    const c = [];
+    for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
+    const A = '(around:70,' + c.join(',') + ')';
+    const q = '[out:json][timeout:25];(' +
+      'nwr[shop~"^(supermarket|convenience)$"]' + A + ';' +
+      'nwr[amenity~"^(pharmacy|fuel)$"]' + A + ';' +
+      'nwr[military=bunker]' + A + ';nwr[building=bunker]' + A + ';' +
+      'nwr[amenity=shelter][shelter_type~"basement|bunker|air_raid"]' + A + ';' +
+      ');out center tags;';
+    const j = await fetchJSON(CFG.OVERPASS, {
+      method: 'POST', body: 'data=' + encodeURIComponent(q),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    }, 30000);
+    if (rt !== route) return;
+    const out = [];
+    for (const e of j.elements || []) {
+      const lat = e.lat != null ? e.lat : e.center && e.center.lat, lon = e.lon != null ? e.lon : e.center && e.center.lon;
+      const t = e.tags || {}, type = POI_TYPES.find(x => x.test(t));
+      if (lat == null || !type) continue;
+      const pr = NC.project(rt, [lat, lon]);
+      if (pr.d > 80) continue;
+      out.push({ lat, lon, s: pr.s, icon: type.icon, name: t.name || t.brand || type.label, kind: type.label });
+    }
+    out.sort((a, b) => a.s - b.s);
+    rt.pois = out;
+    renderPois();
+  }
+  function renderPois() {
+    MV.setPois(showPois && route && route.pois ? route.pois : [], poi => toast(poi.icon + ' ' + poi.name + (poi.name !== poi.kind ? ' · ' + poi.kind : ''), 2500));
+    $('btnPoi').style.opacity = showPois ? 1 : 0.45;
+  }
+  function updateNear() {
+    const el = $('near');
+    const next = showPois && route && route.pois ? route.pois.find(x => x.s > st.s - 10 && x.s - st.s < 400) : null;
+    if (!next) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    const d = Math.max(0, next.s - st.s);
+    el.innerHTML = '<span class="ic"></span><span class="n"></span><span class="d"></span>';
+    el.querySelector('.ic').textContent = next.icon;
+    el.querySelector('.n').textContent = next.name;
+    el.querySelector('.d').textContent = d < 30 ? 'поруч' : NC.fmtDist(d, st.mode === 'dr');
+  }
+
+  // ---------- Мітки ----------
+  let pins = [];
+  try { pins = JSON.parse(store.get('nav_pins') || '[]'); } catch (e) { pins = []; }
+  let pinSel = null;
+  function savePins() { store.set('nav_pins', JSON.stringify(pins)); MV.setPins(pins, openPin); }
+  function openPin(pin) {
+    pinSel = pin;
+    $('pinTitle').textContent = '📌 ' + pin.name;
+    $('pinInfo').textContent = 'Збережено ' + new Date(pin.t).toLocaleString('uk-UA');
+    $('pinModal').classList.remove('hidden');
+  }
+  function addPin(p) {
+    if (st.pick) return;
+    const n = pins.reduce((m, x) => Math.max(m, x.n || 0), 0) + 1;
+    pins.push({ lat: p[0], lon: p[1], n, name: 'Мітка ' + n, t: Date.now() });
+    savePins(); haptic('light'); toast('📌 Мітку ' + n + ' збережено', 2000);
+  }
+  MV.on('longPress', addPin);
+
   function setRoute(rt, fit) {
-    route = rt;
-    if (routeLine) map.removeLayer(routeLine);
-    routeLine = L.polyline(rt.pts, { color: '#1f7ae0', weight: 6, opacity: 0.8 }).addTo(map);
-    signalLayer.clearLayers();
-    if (fit) map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
+    route = rt; camBearing = null;
+    MV.setRoute(rt.pts); MV.setSignals([]); MV.setPois([]);
+    if (fit) MV.fit(rt.pts, camPadding());
     st.s = 0; st.anchorS = 0; st.lastTurnS = -1e9; st.spoken = {}; st.capT = 0; st.lastSnapSig = null; st.arrived = false;
-    loadSignals(rt).catch(() => toast('Світлофори не завантажились — підказки будуть за відстанню', 3000));
+    loadSignals(rt).catch(() => toast('Світлофори не завантажились — підказки будуть за відстанню', 3000))
+      .then(() => loadPois(rt)).catch(() => {});
   }
 
   async function reroute(from, force) {
@@ -665,17 +811,14 @@
 
   function setDest(p, name) {
     st.dest = p; st.destName = name || 'Точка на мапі';
-    if (destMarker) map.removeLayer(destMarker);
-    destMarker = L.marker(p).addTo(map).bindTooltip('Куди', { permanent: true, direction: 'top' });
+    MV.marker('dest', p, '🏁<b>Куди</b>');
     $('dest').value = st.destName; $('results').innerHTML = '';
     $('instr').textContent = 'Готово до поїздки';
     $('sub').textContent = st.destName;
   }
   function setStart(p) {
     st.start = p;
-    if (startMarker) map.removeLayer(startMarker);
-    startMarker = L.circleMarker(p, { radius: 8, color: '#0a0', fillColor: '#0c0', fillOpacity: 1 }).addTo(map)
-      .bindTooltip('Звідки', { permanent: true, direction: 'top' });
+    MV.marker('start', p, '🟢<b>Звідки</b>');
     toast('Точку старту позначено', 1500);
   }
 
@@ -696,8 +839,9 @@
     st.mode = (!st.start && freshGood()) ? 'gps' : 'dr';
     setRoute(rt, true);
     st.follow = true;
-    map.setView(from, 17);
-    $('setup').classList.add('hidden'); $('drive').classList.remove('hidden');
+    $('setup').classList.add('hidden'); $('drive').classList.remove('hidden'); $('speedo').classList.remove('hidden');
+    placeSpeedo();
+    MV.setView(from, 17);
     requestWake();
     track(st.mode === 'gps' ? 'route-gps' : 'route-nogps', st.mode === 'gps' ? 'Маршрут (з GPS)' : 'Маршрут (без GPS)');
     say(st.mode === 'gps' ? 'Маршрут побудовано. Поїхали.' : 'Маршрут побудовано. Веду за датчиками.');
@@ -705,10 +849,11 @@
 
   function stopNav() {
     st.nav = false; st.mode = 'none'; route = null;
-    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-    signalLayer.clearLayers();
-    st.start = null; if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+    MV.setRoute([]); MV.setSignals([]); MV.setPois([]); camBearing = null;
+    st.start = null; MV.marker('start', null);
     $('drive').classList.add('hidden'); $('setup').classList.remove('hidden');
+    $('speedo').classList.add('hidden'); $('near').classList.add('hidden');
+    MV.idle(camPadding());
     $('instr').textContent = 'Куди їдемо?'; $('sub').textContent = 'Введіть адресу призначення внизу';
     try { if (wakeLock) wakeLock.release(); } catch (e) {}
     try { if (hasSpeech) speechSynthesis.cancel(); } catch (e) {}
@@ -784,16 +929,17 @@
       }
 
       const p = NC.pointAt(route, st.s);
-      if (st.mode === 'dr') {
-        const unc = Math.max(30, 30 + 0.15 * (st.s - st.anchorS));
-        drawPos(p, unc, 'dr');
-      }
-      if (st.follow && now - st.lastPan > 800) {
+      const brg = routeBearing();
+      const c = st.mode === 'gps' && G.lastGood ? [G.lastGood.lat, G.lastGood.lon] : p;
+      if (st.mode === 'dr') drawPos(p, Math.max(30, 30 + 0.15 * (st.s - st.anchorS)), 'dr');
+      else if (G.lastGood) drawPos(c, G.lastGood.acc || 20, 'gps');
+      if (st.follow && now - st.lastPan > 850) {
         st.lastPan = now;
-        const c = st.mode === 'gps' && G.lastGood ? [G.lastGood.lat, G.lastGood.lon] : p;
-        map.panTo(c, { animate: true, duration: 0.5 });
+        MV.follow(c, brg, camPadding());
       }
       updateGuidance();
+      updateNear();
+      updateSpeedo();
     }
     updateStatus();
     if (Cal.open) updateCal();
@@ -890,7 +1036,7 @@
           d.textContent = r.display_name.split(',').slice(0, 4).join(',');
           d.onclick = () => {
             const p = [parseFloat(r.lat), parseFloat(r.lon)];
-            setDest(p, d.textContent); map.setView(p, 15);
+            setDest(p, d.textContent); MV.setView(p, 15);
           };
           box.appendChild(d);
         }
@@ -899,9 +1045,8 @@
   });
 
   // ---------- Кнопки ----------
-  map.on('click', e => {
+  MV.on('click', p => {
     if (!st.pick) return;
-    const p = [e.latlng.lat, e.latlng.lng];
     const mode = st.pick; st.pick = null;
     if (mode === 'dest') setDest(p, 'Точка на мапі');
     else if (mode === 'start') setStart(p);
@@ -959,6 +1104,53 @@
   $('btnInvert').onclick = () => {
     Motion.invert = !Motion.invert; store.set('nav_invert', Motion.invert ? '1' : '0'); Cal.last = '';
   };
+
+  // ---------- Спідометр ----------
+  function placeSpeedo() { $('speedo').style.bottom = ($('drive').offsetHeight + 18) + 'px'; }
+  function updateSpeedo() {
+    let v, approx = false;
+    if (st.mode === 'gps' && G.lastGood && Date.now() - G.lastGood.t < 8000) {
+      v = G.lastGood.speed != null && G.lastGood.speed >= 0 ? G.lastGood.speed : 0;
+    } else { v = Motion.moving ? curSpeed() : 0; approx = true; }
+    $('speedo').querySelector('.v').textContent = (approx ? '≈' : '') + Math.round(v * 3.6);
+  }
+  window.addEventListener('resize', placeSpeedo);
+
+  // ---------- Вигляд карти й місця ----------
+  function renderTheme() { $('btnTheme').textContent = theme === 'neon' ? '🗺' : '🌃'; }
+  $('btnTheme').onclick = () => {
+    theme = theme === 'neon' ? 'classic' : 'neon';
+    store.set('nav_theme', theme); MV.setTheme(theme); renderTheme();
+    st.lastPan = 0; if (!st.nav) MV.idle(camPadding());
+    toast(theme === 'neon' ? 'Неонова 3D-карта' : 'Звичайна карта', 1500);
+  };
+  renderTheme();
+  $('btnPoi').onclick = () => {
+    showPois = !showPois; store.set('nav_pois', showPois ? '1' : '0'); renderPois();
+    toast(showPois ? 'Місця вздовж маршруту показано' : 'Місця сховано', 1500);
+  };
+  renderPois();
+  $('pinClose').onclick = () => $('pinModal').classList.add('hidden');
+  $('pinDel').onclick = () => {
+    pins = pins.filter(x => x !== pinSel); savePins();
+    $('pinModal').classList.add('hidden'); toast('Мітку видалено', 1500);
+  };
+  $('pinGo').onclick = () => {
+    $('pinModal').classList.add('hidden');
+    if (st.nav) stopNav();
+    setDest([pinSel.lat, pinSel.lon], pinSel.name);
+    go();
+  };
+  MV.setPins(pins, openPin);
+  setTimeout(() => MV.idle(camPadding()), 300);
+
+  // Демо для перевірки вигляду: ?demo=1 (імітація поїздки без GPS)
+  if (/[?&]demo=1/.test(location.search)) {
+    setTimeout(() => {
+      setStart([50.4497, 30.5228]); setDest([50.4410, 30.5160], 'Демо');
+      go().then(() => { st.speedMode = 'manual'; st.vManual = 30; Motion.moving = true; renderSpeed(); });
+    }, 1500);
+  }
 
   // Інструкція: кнопка ❓ і автопоказ при першому запуску
   document.querySelectorAll('.btnHelp').forEach(b => {
