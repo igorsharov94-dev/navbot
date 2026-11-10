@@ -461,8 +461,17 @@
       let v = 0; for (const b of this.buf) v += (b[1] - mean) ** 2;
       this.std = Math.sqrt(v / this.buf.length);
       this.stdS = this.stdS == null ? this.std : this.stdS + 0.01 * (this.std - this.stdS);
+      // повільна (згладжена за ~8 вимірів) і швидка складові тряски
+      this.ring.push(m); if (this.ring.length > 8) this.ring.shift();
+      const lpv = this.ring.reduce((a, b) => a + b, 0) / this.ring.length;
+      this.fbuf.push([t, lpv, m - lpv]);
+      while (this.fbuf.length && t - this.fbuf[0][0] > 1500) this.fbuf.shift();
+      let ml = 0; for (const b of this.fbuf) ml += b[1]; ml /= this.fbuf.length;
+      let vl = 0, vh = 0; for (const b of this.fbuf) { vl += (b[1] - ml) ** 2; vh += b[2] * b[2]; }
+      this.lp = Math.sqrt(vl / this.fbuf.length); this.hp = Math.sqrt(vh / this.fbuf.length);
 
-      const want = this.std > this.threshold();
+      const B = this.best();
+      const want = B ? Math.log(this.feats()[B.k] + 1e-4) > B.thr : this.std > this.threshold();
       if (want !== this.moving) {
         if (this.candT == null) this.candT = t;
         else if (t - this.candT > (want ? 800 : 2000)) {
@@ -487,6 +496,46 @@
       const ema = (a, b) => a == null ? b : a * 0.9 + b * 0.1;
       if (speed < 0.5) this.idleStd = ema(this.idleStd, this.std);
       else if (speed > 4) this.moveStd = ema(this.moveStd, this.std);
+    },
+
+    // ---- Розпізнавання «їдемо / стоїмо», навчене на вашій машині ----
+    // Двигун на холостому ходу дає дрібну швидку тряску, а їзда — повільніші поштовхи від дороги.
+    // Тому, крім загальної вібрації (std), рахуємо «повільну» (lp, згладжену) і «швидку» (hp) складові,
+    // і за даними GPS обираємо ту ознаку, яка найкраще розділяє стоянку й рух саме у вашій машині.
+    ring: [], fbuf: [], lp: 0, hp: 0,
+    feats() { return { std: this.std, lp: this.lp, ratio: this.lp / (this.hp + 1e-3) }; },
+    F: null, acc: { agree: 0, total: 0 }, lastSave: 0,
+    loadF() {
+      try { this.F = JSON.parse(store.get('nav_motion') || 'null'); } catch (e) {}
+      if (!this.F || !this.F.std) this.F = {};
+      for (const k of ['std', 'lp', 'ratio']) if (!this.F[k]) this.F[k] = { i: [0, 0, 0], m: [0, 0, 0] };   // [n, середнє, дисперсія] (ln)
+    },
+    learnLabel(isMoving) {
+      if (!this.F) this.loadF();
+      const f = this.feats();
+      for (const k in f) {
+        if (!(f[k] > 0)) continue;
+        const c = this.F[k][isMoving ? 'm' : 'i'], x = Math.log(f[k] + 1e-4);
+        c[0] = Math.min(c[0] + 1, 300); const d = x - c[1];
+        c[1] += d / c[0]; c[2] += (d * (x - c[1]) - c[2]) / c[0];
+      }
+      // точність розпізнавання на останніх позначках GPS
+      this.acc.total++; if (this.moving === isMoving) this.acc.agree++;
+      if (this.acc.total > 200) { this.acc.agree *= 0.995; this.acc.total *= 0.995; }
+      if (Date.now() - this.lastSave > 30000) { this.lastSave = Date.now(); store.set('nav_motion', JSON.stringify(this.F)); }
+    },
+    // найкраща ознака та її поріг (у ln)
+    best() {
+      if (!this.F) this.loadF();
+      let best = null;
+      for (const k in this.F) {
+        const I = this.F[k].i, M = this.F[k].m;
+        if (I[0] < 20 || M[0] < 20 || M[1] <= I[1]) continue;
+        const si = Math.sqrt(Math.max(I[2], 1e-4)), sm = Math.sqrt(Math.max(M[2], 1e-4));
+        const sep = (M[1] - I[1]) / Math.sqrt(si * si + sm * sm);
+        if (!best || sep > best.sep) best = { k, sep, thr: I[1] + (M[1] - I[1]) * si / (si + sm) };
+      }
+      return best && best.sep > 0.5 ? best : null;
     },
 
     movingFor() { return this.moving ? performance.now() - this.movingSince : 0; },
@@ -576,6 +625,7 @@
     }
   };
   Vib.load();
+  Motion.loadF();
 
   const Sensors = {
     started: false, kind: '',
@@ -692,6 +742,8 @@
 
     if (f.speed != null && f.speed >= 0) {
       Motion.learn(f.speed);
+      if (f.speed > 3) Motion.learnLabel(true);
+      else if (f.speed < 0.3 && G.lastGood && G.lastGood.speed != null && G.lastGood.speed < 0.3 && f.t - G.lastGood.t < 4000) Motion.learnLabel(false);
       if ((f.acc || 20) <= CFG.GPS_WEAK_ACC) Vib.learn(Motion.stdS, f.speed);
       st.gpsV = st.gpsV == null ? f.speed : st.gpsV + 0.3 * (f.speed - st.gpsV);
     }
@@ -884,6 +936,7 @@
     }
     if (rt !== route) return;
     rt.signals = NC.clusterSignals(rt, nodes);
+    Log.ev('signals', { s: rt.signals.map(Math.round) });
     MV.setSignals(rt.signals.map(s => NC.pointAt(rt, s)));
     toast('Світлофорів на маршруті: ' + rt.signals.length, 2500);
   }
@@ -1016,7 +1069,9 @@
     st.s = 0; st.anchorS = 0; st.lastTurnS = -1e9; st.spoken = {}; st.capT = 0; st.lastSnapSig = null; st.arrived = false;
     rt.prof = NC.headingProfile(rt, 5);
     Prof.reset(Prof.main); Prof.reset(Prof.sh); Prof.lastK = 0; Shadow.n.on = Shadow.o.on = false;
-    Log.ev('route', { total: Math.round(rt.total), turns: rt.turns.length });
+    // форма маршруту (кожні 25 м) і повороти — щоб поїздку можна було відтворити й перевірити
+    const shape = []; for (let x = 0; x <= rt.total; x += 25) { const q = NC.pointAt(rt, x); shape.push([+q[0].toFixed(5), +q[1].toFixed(5)]); }
+    Log.ev('route', { total: Math.round(rt.total), turns: rt.turns.map(t => [Math.round(t.s), Math.round(t.ccw)]), shape });
     loadSignals(rt).catch(() => toast('Світлофори не завантажились — підказки будуть за відстанню', 3000))
       .then(() => loadPois(rt)).catch(() => {});
   }
@@ -1177,7 +1232,7 @@
         app: CFG.APP_VER, started: new Date().toISOString(), platform: (W && W.platform) || navigator.platform,
         ua: navigator.userAgent.slice(0, 120), sensors: Sensors.kind, theme, view,
         from: from.map(v => +v.toFixed(5)), to: to.map(v => +v.toFixed(5)),
-        cols: 't,mode,s,lat,lon,acc,spd,gps,std,moving,vEst,k,errNew,errOld,shAge,yaw',
+        cols: 't,mode,s,lat,lon,acc,spd,gps,std,moving,vEst,k,errNew,errOld,shAge,yaw,lp,hp',
         rows: [], ev: []
       };
       this.t0 = performance.now(); this.lastRow = 0;
@@ -1200,7 +1255,7 @@
         Motion.stdS == null ? null : +Motion.stdS.toFixed(3), Motion.moving ? 1 : 0,
         +(Motion.moving ? curSpeed() : 0).toFixed(1), +st.k.toFixed(2),
         Shadow.n.on ? Math.round(Math.abs(Shadow.n.s - st.s)) : null, Shadow.o.on ? Math.round(Math.abs(Shadow.o.s - st.s)) : null,
-        age, Math.round(Motion.yawDeg)
+        age, Math.round(Motion.yawDeg), +Motion.lp.toFixed(3), +Motion.hp.toFixed(3)
       ]);
       if (this.cur.rows.length > 18000) this.cur.rows.shift();
       if (now - this.lastSave > 30000) { this.lastSave = now; this.save(); }
@@ -1214,6 +1269,8 @@
       if (!this.cur) return;
       this.cur.ended = new Date().toISOString(); this.cur.accuracy = this.stats();
       this.cur.vib = { trained: Vib.trained(), samples: Vib.total() }; this.cur.k = +st.k.toFixed(2);
+      const B = Motion.best();
+      this.cur.motion = { feature: B ? B.k : 'std', sep: B ? +B.sep.toFixed(2) : null, accuracy: Motion.acc.total ? +(Motion.acc.agree / Motion.acc.total).toFixed(2) : null, F: Motion.F };
       try { store.set('nav_log', JSON.stringify(this.cur)); } catch (e) {}
     },
     stop() { this.save(); this.cur = null; },
@@ -1417,7 +1474,7 @@
     $('calYaw').textContent = Math.abs(deg) > 10 ? (deg > 0 ? '↺ ліворуч' : '↻ праворуч') : (Cal.last || '—');
     $('calInfo').textContent =
       'Датчики: ' + (Sensors.kind || 'не запущені') +
-      ' · вібрація ' + Motion.std.toFixed(3) + ' (поріг ' + Motion.threshold().toFixed(3) + ')' +
+      ' · вібрація ' + Motion.std.toFixed(3) + ' (' + (Motion.best() ? 'навчено: ' + Motion.best().k : 'поріг ' + Motion.threshold().toFixed(3)) + ')' +
       ' · ' + (Motion.moving ? 'їдемо' : 'стоїмо') +
       ' · напрямок ' + (Motion.invert ? 'інвертовано' : 'звичайний') +
       (Motion.up() ? '' : ' · орієнтацію телефона не визначено');
@@ -1426,7 +1483,8 @@
     $('accStats').innerHTML = '<b>Точність без GPS</b> (самоперевірка, поки GPS працює):<br>' +
       'через 1 хв: ' + f(S.n[60]) + ' (раніше було ' + f(S.o[60]) + ')<br>' +
       'через 2 хв: ' + f(S.n[120]) + ' (раніше було ' + f(S.o[120]) + ')<br>' +
-      'Швидкість за вібрацією: ' + vibTxt + ' · поправка ×' + st.k.toFixed(2);
+      'Швидкість за вібрацією: ' + vibTxt + ' · поправка ×' + st.k.toFixed(2) + '<br>' +
+      'Розпізнавання зупинок: ' + (Motion.acc.total >= 20 ? Math.round(100 * Motion.acc.agree / Motion.acc.total) + '% (за GPS)' : 'вчиться');
   }
 
   // ---------- Поиск адреса ----------

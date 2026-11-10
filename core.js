@@ -190,7 +190,8 @@
     let best = null, bestCost = Infinity;
     for (const t of pending) {
       const inWindow = t.s >= pos.s - unc && t.s <= pos.s + unc * 1.5 + 100;
-      if (!inWindow && !nextTwo.has(t)) continue;
+      // поза вікном — лише один із двох наступних поворотів і не далі ~600 м (інакше хибні стрибки на кілометри)
+      if (!inWindow && (!nextTwo.has(t) || Math.abs(t.s - pos.s) > Math.max(3 * unc, 600))) continue;
       if (Math.sign(t.ccw) !== Math.sign(deg)) continue;
       const ad = Math.abs(deg - t.ccw);
       if (ad > Math.max(50, 0.45 * Math.abs(t.ccw))) continue;
