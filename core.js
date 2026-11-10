@@ -200,6 +200,77 @@
     return best;
   }
 
+  // ---------- Профіль курсу: «малюнок» дороги ----------
+  // Накопичений (розгорнутий) курс маршруту кожні step метрів, у градусах за годинниковою стрілкою.
+  function headingProfile(rt, step) {
+    step = step || 5;
+    const n = Math.max(2, Math.ceil(rt.total / step) + 1);
+    const H = new Float64Array(n);
+    let prev = null, acc = 0;
+    for (let i = 0; i < n; i++) {
+      const s = Math.min(i * step, rt.total);
+      const a = pointAt(rt, Math.max(0, s - 8)), b = pointAt(rt, Math.min(rt.total, s + 8));
+      const h = dist(a, b) < 1 ? prev : bearing(a, b);
+      if (h == null) { H[i] = 0; continue; }
+      acc = prev == null ? h : acc + norm180(h - prev);
+      prev = h; H[i] = acc;
+    }
+    return { step, H, total: rt.total };
+  }
+  function headingAt(prof, s) {
+    const x = Math.max(0, Math.min(s, prof.total)) / prof.step;
+    const i = Math.min(Math.floor(x), prof.H.length - 2), f = x - i;
+    return prof.H[i] + f * (prof.H[i + 1] - prof.H[i]);
+  }
+
+  // Зіставлення історії гіроскопа з формою маршруту.
+  // meas: [{d, th}] — d: пройдено за розрахунковою швидкістю (м), th: накопичений поворот (°, проти год. стрілки +).
+  // Шукає положення s на маршруті (s0 ± unc) і коефіцієнт alpha (справжня відстань / розрахункова),
+  // за яких вигини дороги найкраще збігаються з поворотами машини.
+  function matchProfile(prof, s0, unc, meas, opts) {
+    opts = opts || {};
+    const L = opts.window || 300, minVar = opts.minVar || 20, minSpan = opts.minSpan || 120;
+    if (!meas || meas.length < 8) return null;
+    const end = meas[meas.length - 1];
+    const smp = [];
+    for (const m of meas) {
+      const back = end.d - m.d;
+      if (back <= L && back >= 0) smp.push({ back, cw: -(end.th - m.th) });
+    }
+    if (smp.length < 8 || smp[0].back < minSpan) return null;
+    let mn = Infinity, mx = -Infinity;
+    for (const x of smp) { mn = Math.min(mn, x.cw); mx = Math.max(mx, x.cw); }
+    if (mx - mn < minVar) return { ok: false, why: 'flat' };   // їхали прямо — порівнювати нічого
+    const lo = Math.max(smp[0].back * 0.6, s0 - unc), hi = Math.min(prof.total, s0 + unc);
+    const bestAt = [];
+    let best = null;
+    for (let s = lo; s <= hi; s += 5) {
+      const Hs = headingAt(prof, s);
+      let bs = null;
+      for (let a = 0.6; a <= 1.501; a += 0.05) {
+        if (s - smp[0].back * a < 0) continue;
+        let c = 0;
+        for (const x of smp) { const d = (Hs - headingAt(prof, s - x.back * a)) - x.cw; c += d * d; }
+        c /= smp.length;
+        const total = c + 20 * ((s - s0) / unc) ** 2 + 4 * ((a - 1) / 0.3) ** 2;
+        if (!bs || total < bs.total) bs = { s, a, raw: c, total };
+      }
+      if (!bs) continue;
+      bestAt.push(bs);
+      if (!best || bs.total < best.total) best = bs;
+    }
+    if (!best) return null;
+    let second = Infinity;
+    for (const b of bestAt) if (Math.abs(b.s - best.s) > 60) second = Math.min(second, b.total);
+    // наскільки вигнута дорога в найкращому варіанті
+    let rmn = Infinity, rmx = -Infinity;
+    const Hb = headingAt(prof, best.s);
+    for (const x of smp) { const p = Hb - headingAt(prof, best.s - x.back * best.a); rmn = Math.min(rmn, p); rmx = Math.max(rmx, p); }
+    const rms = Math.sqrt(best.raw), ratio = best.total / second;
+    const ok = rms < 12 && ratio < 0.5 && rmx - rmn >= minVar;
+    return { ok, s: best.s, alpha: best.a, rms, ratio, why: ok ? '' : (rms >= 12 ? 'rms' : ratio >= 0.5 ? 'ambiguous' : 'route-flat') };
+  }
+
   // ---------- Светофоры ----------
   function clusterSignals(rt, nodes) {
     const arr = [];
@@ -238,7 +309,8 @@
 
   const api = {
     dist, bearing, norm180, maneuverText, isAnnounced, buildRoute, pointAt, project,
-    computeTurns, matchTurn, clusterSignals, landmark, fmtDist
+    computeTurns, matchTurn, clusterSignals, landmark, fmtDist,
+    headingProfile, headingAt, matchProfile
   };
   root.NavCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
