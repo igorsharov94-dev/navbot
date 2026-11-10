@@ -64,6 +64,15 @@
   .mv-pos.dr svg path { stroke: #ffb020; }
   .mv-pin { font-size: 26px; line-height: 1; text-align: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
   .mv-pin b { display: block; font: 600 11px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.6); border-radius: 6px; padding: 1px 5px; margin-top: 2px; white-space: nowrap; }
+  .mv-poi.chain { width: auto; height: 22px; padding: 0 7px; border-radius: 11px; font: 700 11px system-ui, sans-serif; color: #222; white-space: nowrap; }
+  .mv-poi.chain .i { font-size: 12px; margin-right: 3px; }
+  .mv-poi.c0 { border-color: #8a4dff; } .mv-poi.c1 { border-color: #12a150; } .mv-poi.c2 { border-color: #f08c00; } .mv-poi.c3 { border-color: #1f7ae0; }
+  body.zfar .mv-poi.chain .t { display: none; }
+  body.zfar .mv-poi.chain { padding: 0; width: 22px; justify-content: center; }
+  body.zfar .mv-poi.chain .i { margin: 0; }
+  body.neon .mv-poi.chain { color: #fff; }
+  body.neon .mv-poi.c0 { border-color: #c06bff; box-shadow: 0 0 8px #c06bff; } body.neon .mv-poi.c1 { border-color: #3dff9a; box-shadow: 0 0 8px #3dff9a; }
+  body.neon .mv-poi.c2 { border-color: #ffb020; box-shadow: 0 0 8px #ffb020; } body.neon .mv-poi.c3 { border-color: #4db8ff; box-shadow: 0 0 8px #4db8ff; }
   .mv-poi { width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 2px solid #8a4dff; display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; }
   #fab { position: absolute; right: 10px; top: 42%; z-index: 1001; display: flex; flex-direction: column; gap: 8px; }
   #fab button { width: 48px; height: 48px; border-radius: 50%; padding: 0; font-size: 22px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
@@ -209,7 +218,7 @@
       <li><span class="dot" style="background:#e08a00"></span> <b>Помаранчева точка</b>, «🧭 За датчиками» — GPS збитий, позиція приблизна. Коло навколо — можлива похибка.</li>
       <li><b>Червоні точки</b> на маршруті — світлофори.</li>
       <li><b>Велике число зліва внизу</b> — швидкість. Зі знаком «≈» — розрахункова, коли GPS немає.</li>
-      <li><b>Значки</b> 🛒 💊 ⛽ 🛡 — магазини, аптеки, заправки й укриття вздовж маршруту. Найближче з’являється у плашці «поруч».</li>
+      <li><b>Значки</b> 🛒 💊 ⛽ 🛡 — магазини, аптеки, заправки й укриття вздовж маршруту. Найближче з’являється у плашці «поруч». Популярні мережі (АТБ, Сільпо, Novus, Подорожник, ОККО, WOG…) показані значком із назвою; колір рамки — тип місця. Здалеку — лише іконки, наблизьте мапу, щоб побачити назви.</li>
       <li>Вгорі — наступний маневр, наприклад «на 2-му світлофорі праворуч».</li>
     </ul>
 
@@ -901,7 +910,7 @@
     if (!DB.loading) {
       DB.loading = fetchJSON('pois-kyiv.json', null, 30000).then(d => {
         const T = POI_TYPES;
-        d.pois = d.p.map(x => ({ lat: x[0], lon: x[1], icon: T[x[2]].icon, kind: T[x[2]].label, name: x[3] || T[x[2]].label }));
+        d.pois = d.p.map(x => ({ lat: x[0], lon: x[1], cat: x[2], icon: T[x[2]].icon, kind: T[x[2]].label, name: x[3] || T[x[2]].label, chain: chainOf(x[3]) }));
         d.sig = d.s.map(x => ({ lat: x[0], lon: x[1] }));
         DB.data = d; return d;
       }).catch(() => { DB.loading = null; return null; });
@@ -948,6 +957,28 @@
     { icon: '⛽', label: 'Заправка', test: t => t.amenity === 'fuel' },
     { icon: '🛡', label: 'Укриття', test: t => t.military === 'bunker' || t.building === 'bunker' || /basement|bunker|air_raid/.test(t.shelter_type || '') }
   ];
+  // Популярні мережі: значок із назвою мережі (без фірмових логотипів — це товарні знаки)
+  const CHAINS = [
+    // магазини
+    [/^фора/i, 'Фора'], [/^атб/i, 'АТБ'], [/^сільпо|^silpo/i, 'Сільпо'], [/^novus|^новус/i, 'Novus'],
+    [/^коло$/i, 'Коло'], [/^мікс ?март/i, 'Мікс Март'], [/^лоток/i, 'ЛотОК'], [/^бадьорий/i, 'Бадьорий'],
+    [/^varus|^варус/i, 'Varus'], [/^велмарт/i, 'Велмарт'], [/^ашан|^auchan/i, 'Ашан'], [/^spar/i, 'Spar'],
+    [/thrash|траш/i, 'Траш'], [/^еко[ -]?маркет/i, 'ЕКО маркет'], [/^metro|^метро/i, 'Metro'], [/^billa|^білла/i, 'Billa'],
+    // аптеки
+    [/^подорожник/i, 'Подорожник'], [/^анц$|низьких цін|^аптека нц/i, 'АНЦ'], [/^бажаємо здоров/i, 'Бажаємо здоровʼя'],
+    [/доброго дня/i, 'Доброго Дня'], [/оптових ц/i, 'Оптові ціни'], [/^фармація/i, 'Фармація'], [/^anri/i, 'Anri-Pharm'],
+    [/^біла ромашка/i, 'Біла ромашка'], [/^копійка/i, 'Копійка'], [/^мед-сервіс/i, 'Мед-сервіс'], [/соціальна аптека/i, 'Соціальна'],
+    [/^аптека 911|^911/i, '911'], [/^36[.,]6/i, '36,6'], [/^watsons/i, 'Watsons'],
+    // заправки
+    [/^окко|^okko/i, 'ОККО'], [/^wog|^вог/i, 'WOG'], [/^укрнафта/i, 'Укрнафта'], [/^кло$|^klo$/i, 'КЛО'],
+    [/^брсм/i, 'БРСМ'], [/^avantage ?7|^авантаж/i, 'Avantage 7'], [/^socar|^сокар/i, 'SOCAR'], [/^upg/i, 'UPG'],
+    [/^amic|^амік/i, 'Amic'], [/^shell|^шелл/i, 'Shell'], [/^motto/i, 'Motto'], [/^parallel/i, 'Parallel']
+  ];
+  function chainOf(name) {
+    if (!name) return null;
+    for (const [re, label] of CHAINS) if (re.test(name.trim())) return label;
+    return null;
+  }
   let showPois = store.get('nav_pois') !== '0';
   // Запит до OpenStreetMap: area — «(around:…)» уздовж маршруту або «(пд,зх,пн,сх)» — видима частина мапи
   async function queryPois(area) {
@@ -966,7 +997,7 @@
       const lat = e.lat != null ? e.lat : e.center && e.center.lat, lon = e.lon != null ? e.lon : e.center && e.center.lon;
       const t = e.tags || {}, type = POI_TYPES.find(x => x.test(t));
       if (lat == null || !type) continue;
-      out.push({ lat, lon, icon: type.icon, name: t.name || t.brand || type.label, kind: type.label });
+      out.push({ lat, lon, cat: POI_TYPES.indexOf(type), icon: type.icon, name: t.name || t.brand || type.label, kind: type.label, chain: chainOf(t.brand || t.name) });
     }
     return out;
   }

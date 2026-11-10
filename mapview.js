@@ -125,6 +125,9 @@
       this.map.on('zoomstart', userMove);
       this.map.on('click', e => this.handlers.click && this.handlers.click([e.lngLat.lat, e.lngLat.lng]));
       this._longPress();
+      // здалеку значки мереж — лише іконки, щоб не захаращувати мапу
+      const zf = () => document.body.classList.toggle('zfar', this.map.getZoom() < 15);
+      this.map.on('zoom', zf); zf();
       document.body.classList.toggle('neon', theme === 'neon');
     },
 
@@ -203,7 +206,11 @@
     setPois(list, onTap) {
       this.markers.pois.forEach(m => m.remove()); this.markers.pois = [];
       for (const poi of list || []) {
-        const e = el('mv-poi', '<span>' + poi.icon + '</span>');
+        // мережа — значок із назвою; інше — іконка категорії. Колір рамки — тип місця.
+        const e = poi.chain
+          ? el('mv-poi chain c' + (poi.cat || 0), '<span class="i">' + poi.icon + '</span><span class="t"></span>')
+          : el('mv-poi c' + (poi.cat || 0), '<span>' + poi.icon + '</span>');
+        if (poi.chain) e.querySelector('.t').textContent = poi.chain;
         e.title = poi.name;
         if (onTap) e.addEventListener('click', ev => { ev.stopPropagation(); onTap(poi); });
         this.markers.pois.push(new maplibregl.Marker({ element: e }).setLngLat(ll([poi.lat, poi.lon])).addTo(this.map));
