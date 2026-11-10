@@ -221,7 +221,7 @@
       <li><b>🔊 / 🔔 / 🔇</b> — голос, лише сигнал або тиша.</li>
       <li><b>Завершити</b> — закінчити поїздку.</li>
       <li><b>🌃 / 🗺</b> праворуч на мапі — неонова 3D-карта або звичайна. Якщо телефон гальмує — оберіть звичайну.</li>
-      <li><b>🛒</b> праворуч на мапі — показати або сховати місця вздовж маршруту.</li>
+      <li><b>🛒</b> праворуч на мапі — показати або сховати місця: під час поїздки — вздовж маршруту, без маршруту — на видимій частині мапи (наблизьте мапу).</li>
       <li><b>3D / 2D / N↑</b> праворуч на мапі — вид камери: 3D за машиною, зверху за напрямком руху або зверху з північчю вгорі.</li>
       <li>Якщо посунули мапу пальцем — за 8 секунд вона сама повернеться до машини. Одразу — кнопка «Центр».</li>
     </ul>
@@ -751,37 +751,79 @@
     { icon: '🛡', label: 'Укриття', test: t => t.military === 'bunker' || t.building === 'bunker' || /basement|bunker|air_raid/.test(t.shelter_type || '') }
   ];
   let showPois = store.get('nav_pois') !== '0';
-  async function loadPois(rt) {
-    const step = rt.total > 20000 ? 120 : 60;
-    const c = [];
-    for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
-    const A = '(around:70,' + c.join(',') + ')';
+  // Запит до OpenStreetMap: area — «(around:…)» уздовж маршруту або «(пд,зх,пн,сх)» — видима частина мапи
+  async function queryPois(area) {
     const q = '[out:json][timeout:25];(' +
-      'nwr[shop~"^(supermarket|convenience)$"]' + A + ';' +
-      'nwr[amenity~"^(pharmacy|fuel)$"]' + A + ';' +
-      'nwr[military=bunker]' + A + ';nwr[building=bunker]' + A + ';' +
-      'nwr[amenity=shelter][shelter_type~"basement|bunker|air_raid"]' + A + ';' +
-      ');out center tags;';
+      'nwr[shop~"^(supermarket|convenience)$"]' + area + ';' +
+      'nwr[amenity~"^(pharmacy|fuel)$"]' + area + ';' +
+      'nwr[military=bunker]' + area + ';nwr[building=bunker]' + area + ';' +
+      'nwr[amenity=shelter][shelter_type~"basement|bunker|air_raid"]' + area + ';' +
+      ');out tags center 400;';
     const j = await fetchJSON(CFG.OVERPASS, {
       method: 'POST', body: 'data=' + encodeURIComponent(q),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     }, 30000);
-    if (rt !== route) return;
     const out = [];
     for (const e of j.elements || []) {
       const lat = e.lat != null ? e.lat : e.center && e.center.lat, lon = e.lon != null ? e.lon : e.center && e.center.lon;
       const t = e.tags || {}, type = POI_TYPES.find(x => x.test(t));
       if (lat == null || !type) continue;
-      const pr = NC.project(rt, [lat, lon]);
-      if (pr.d > 80) continue;
-      out.push({ lat, lon, s: pr.s, icon: type.icon, name: t.name || t.brand || type.label, kind: type.label });
+      out.push({ lat, lon, icon: type.icon, name: t.name || t.brand || type.label, kind: type.label });
+    }
+    return out;
+  }
+  async function loadPois(rt) {
+    const step = rt.total > 20000 ? 120 : 60;
+    const c = [];
+    for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
+    let list;
+    try { list = await queryPois('(around:70,' + c.join(',') + ')'); }
+    catch (e) { if (showPois) toast('Не вдалося завантажити місця — немає зв’язку з OpenStreetMap', 3000); return; }
+    if (rt !== route) return;
+    const out = [];
+    for (const x of list) {
+      const pr = NC.project(rt, [x.lat, x.lon]);
+      if (pr.d <= 80) { x.s = pr.s; out.push(x); }
     }
     out.sort((a, b) => a.s - b.s);
     rt.pois = out;
     renderPois();
   }
+
+  // Без маршруту — місця на видимій частині мапи
+  const area = { list: [], center: null, zoom: 0, t: 0, busy: false };
+  async function loadAreaPois(manual) {
+    if (!showPois || route) return;
+    const m = MV.map, z = m.getZoom(), c = m.getCenter();
+    if (z < 14) {
+      area.list = []; area.center = null; renderPois();
+      if (manual) toast('Наблизьте мапу, щоб побачити місця поруч', 2500);
+      return;
+    }
+    const here = [c.lat, c.lng];
+    if (!manual && area.center && NC.dist(area.center, here) < 400 && Math.abs(area.zoom - z) < 1) return;
+    if (area.busy || (!manual && Date.now() - area.t < 8000)) return;
+    area.busy = true; area.t = Date.now();
+    if (manual) toast('Шукаю місця поруч…', 1500);
+    const b = m.getBounds();
+    try {
+      const list = await queryPois('(' + [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(v => v.toFixed(5)).join(',') + ')');
+      list.forEach(x => { x.d = NC.dist(here, [x.lat, x.lon]); });
+      list.sort((a, b2) => a.d - b2.d);
+      area.list = list.slice(0, 120); area.center = here; area.zoom = z;
+      if (showPois && !route) {
+        renderPois();
+        if (manual) toast(area.list.length ? 'Знайдено місць: ' + area.list.length : 'Поруч нічого не знайдено', 2000);
+      }
+    } catch (e) {
+      if (manual) toast('Не вдалося завантажити місця — немає зв’язку з OpenStreetMap', 3000);
+    } finally { area.busy = false; }
+  }
+  let areaT = null;
+  // не частіше разу на секунду; під час руху камери теж оновлюється (раз на 8 с або через 400 м)
+  MV.map.on('moveend', () => { if (!areaT) areaT = setTimeout(() => { areaT = null; loadAreaPois(false); }, 1000); });
   function renderPois() {
-    MV.setPois(showPois && route && route.pois ? route.pois : [], poi => toast(poi.icon + ' ' + poi.name + (poi.name !== poi.kind ? ' · ' + poi.kind : ''), 2500));
+    MV.setPois(!showPois ? [] : route ? (route.pois || []) : area.list, poi => toast(poi.icon + ' ' + poi.name + (poi.name !== poi.kind ? ' · ' + poi.kind : ''), 2500));
     $('btnPoi').style.opacity = showPois ? 1 : 0.45;
   }
   function updateNear() {
@@ -878,6 +920,7 @@
   function stopNav() {
     st.nav = false; st.mode = 'none'; route = null;
     MV.setRoute([]); MV.setSignals([]); MV.setPois([]); camBearing = null;
+    area.center = null; setTimeout(() => loadAreaPois(false), 1500);
     st.start = null; MV.marker('start', null);
     $('drive').classList.add('hidden'); $('setup').classList.remove('hidden');
     $('speedo').classList.add('hidden'); $('near').classList.add('hidden');
@@ -1204,7 +1247,9 @@
   renderTheme();
   $('btnPoi').onclick = () => {
     showPois = !showPois; store.set('nav_pois', showPois ? '1' : '0'); renderPois();
-    toast(showPois ? 'Місця вздовж маршруту показано' : 'Місця сховано', 1500);
+    if (!showPois) toast('Місця сховано', 1500);
+    else if (route) toast(route.pois ? 'Місць уздовж маршруту: ' + route.pois.length : 'Шукаю місця вздовж маршруту…', 2000);
+    else loadAreaPois(true);
   };
   renderPois();
   $('pinClose').onclick = () => $('pinModal').classList.add('hidden');
