@@ -728,17 +728,48 @@
     return NC.buildRoute(j, { turnMinDeg: CFG.TURN_MIN_DEG });
   }
 
+  // ---------- Готова база Києва (pois-kyiv.json): місця й світлофори без запитів до сервера ----------
+  // Сервер OpenStreetMap (Overpass) буває перевантажений і відповідає хвилинами — тому для Києва все береться з файлу.
+  const DB = { data: null, loading: null };
+  function loadDb() {
+    if (!DB.loading) {
+      DB.loading = fetchJSON('pois-kyiv.json', null, 30000).then(d => {
+        const T = POI_TYPES;
+        d.pois = d.p.map(x => ({ lat: x[0], lon: x[1], icon: T[x[2]].icon, kind: T[x[2]].label, name: x[3] || T[x[2]].label }));
+        d.sig = d.s.map(x => ({ lat: x[0], lon: x[1] }));
+        DB.data = d; return d;
+      }).catch(() => { DB.loading = null; return null; });
+    }
+    return DB.loading;
+  }
+  loadDb();
+  // Межі маршруту з запасом m метрів
+  function routeBox(rt, m) {
+    let s = 90, w = 180, n = -90, e = -180;
+    for (const p of rt.pts) { s = Math.min(s, p[0]); n = Math.max(n, p[0]); w = Math.min(w, p[1]); e = Math.max(e, p[1]); }
+    const dl = m / 111000, dg = m / (111000 * Math.cos(s * Math.PI / 180));
+    return [s - dl, w - dg, n + dl, e + dg];
+  }
+  const inBox = (b, B) => b[0] >= B[0] && b[1] >= B[1] && b[2] <= B[2] && b[3] <= B[3];
+  const ptIn = (x, b) => x.lat >= b[0] && x.lat <= b[2] && x.lon >= b[1] && x.lon <= b[3];
+
   async function loadSignals(rt) {
-    const step = rt.total > 20000 ? 60 : 30;
-    const c = [];
-    for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
-    const q = '[out:json][timeout:25];node[highway=traffic_signals](around:20,' + c.join(',') + ');out;';
-    const j = await fetchJSON(CFG.OVERPASS, {
-      method: 'POST', body: 'data=' + encodeURIComponent(q),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    }, 30000);
+    const db = await loadDb(), box = routeBox(rt, 40);
+    let nodes;
+    if (db && inBox(box, db.bbox)) nodes = db.sig.filter(x => ptIn(x, box));
+    else {
+      const step = rt.total > 20000 ? 60 : 30;
+      const c = [];
+      for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
+      const q = '[out:json][timeout:50];node[highway=traffic_signals](around:20,' + c.join(',') + ');out;';
+      const j = await fetchJSON(CFG.OVERPASS, {
+        method: 'POST', body: 'data=' + encodeURIComponent(q),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      }, 60000);
+      nodes = j.elements || [];
+    }
     if (rt !== route) return;
-    rt.signals = NC.clusterSignals(rt, j.elements || []);
+    rt.signals = NC.clusterSignals(rt, nodes);
     MV.setSignals(rt.signals.map(s => NC.pointAt(rt, s)));
     toast('Світлофорів на маршруті: ' + rt.signals.length, 2500);
   }
@@ -753,16 +784,16 @@
   let showPois = store.get('nav_pois') !== '0';
   // Запит до OpenStreetMap: area — «(around:…)» уздовж маршруту або «(пд,зх,пн,сх)» — видима частина мапи
   async function queryPois(area) {
-    const q = '[out:json][timeout:25];(' +
-      'nwr[shop~"^(supermarket|convenience)$"]' + area + ';' +
-      'nwr[amenity~"^(pharmacy|fuel)$"]' + area + ';' +
+    const q = '[out:json][timeout:50];(' +
+      'nwr[shop=supermarket]' + area + ';nwr[shop=convenience]' + area + ';' +
+      'nwr[amenity=pharmacy]' + area + ';nwr[amenity=fuel]' + area + ';' +
       'nwr[military=bunker]' + area + ';nwr[building=bunker]' + area + ';' +
       'nwr[amenity=shelter][shelter_type~"basement|bunker|air_raid"]' + area + ';' +
       ');out tags center 400;';
     const j = await fetchJSON(CFG.OVERPASS, {
       method: 'POST', body: 'data=' + encodeURIComponent(q),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    }, 30000);
+    }, 60000);
     const out = [];
     for (const e of j.elements || []) {
       const lat = e.lat != null ? e.lat : e.center && e.center.lat, lon = e.lon != null ? e.lon : e.center && e.center.lon;
@@ -777,7 +808,9 @@
     const c = [];
     for (let s = 0; s <= rt.total; s += step) { const p = NC.pointAt(rt, s); c.push(p[0].toFixed(5), p[1].toFixed(5)); }
     let list;
-    try { list = await queryPois('(around:70,' + c.join(',') + ')'); }
+    const db = await loadDb(), box = routeBox(rt, 100);
+    if (db && inBox(box, db.bbox)) list = db.pois.filter(x => ptIn(x, box)).map(x => Object.assign({}, x));
+    else try { list = await queryPois('(around:70,' + c.join(',') + ')'); }
     catch (e) { if (showPois) toast('Не вдалося завантажити місця — немає зв’язку з OpenStreetMap', 3000); return; }
     if (rt !== route) return;
     const out = [];
@@ -804,10 +837,15 @@
     if (!manual && area.center && NC.dist(area.center, here) < 400 && Math.abs(area.zoom - z) < 1) return;
     if (area.busy || (!manual && Date.now() - area.t < 8000)) return;
     area.busy = true; area.t = Date.now();
-    if (manual) toast('Шукаю місця поруч…', 1500);
-    const b = m.getBounds();
+    if (manual && !DB.data) toast('Шукаю місця поруч…', 1500);
+    // видима частина, але не далі ~2 км від центру (у 3D горизонт дуже далеко)
+    const b = m.getBounds(), dl = 2000 / 111000, dg = dl / Math.cos(c.lat * Math.PI / 180);
+    const vb = [Math.max(b.getSouth(), c.lat - dl), Math.max(b.getWest(), c.lng - dg), Math.min(b.getNorth(), c.lat + dl), Math.min(b.getEast(), c.lng + dg)];
     try {
-      const list = await queryPois('(' + [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(v => v.toFixed(5)).join(',') + ')');
+      const db = await loadDb();
+      const list = db && inBox(vb, db.bbox)
+        ? db.pois.filter(x => ptIn(x, vb)).map(x => Object.assign({}, x))
+        : await queryPois('(' + vb.map(v => v.toFixed(5)).join(',') + ')');
       list.forEach(x => { x.d = NC.dist(here, [x.lat, x.lon]); });
       list.sort((a, b2) => a.d - b2.d);
       area.list = list.slice(0, 120); area.center = here; area.zoom = z;
