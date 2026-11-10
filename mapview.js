@@ -177,7 +177,8 @@
     setSignals(pts) { this.data.signals = pts || []; this._set('signals', fc(this.data.signals.map(pointF))); },
 
     drawPos(p, r, kind, bearing) {
-      this.data.acc = circle(p, r); this._set('acc', this.data.acc);
+      const now = performance.now();
+      if (!this._accT || now - this._accT > 200) { this._accT = now; this.data.acc = circle(p, r); this._set('acc', this.data.acc); }
       if (!this.markers.pos) {
         const e = el('mv-pos');
         this.markers.pos = new maplibregl.Marker({ element: e, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(ll(p)).addTo(this.map);
@@ -239,9 +240,14 @@
       });
     },
 
-    idle(pad) {
-      const neon = this.theme === 'neon';
-      this.map.easeTo({ pitch: neon ? 45 : 0, bearing: 0, padding: pad || { top: 0, bottom: 0, left: 0, right: 0 }, duration: 600 });
+    // Камера, що щокадру тримає машину: без анімацій, тому без ривків і відставання
+    cam(p, bearing, pitch, zoom, pad) {
+      this.map.jumpTo({ center: ll(p), bearing: bearing == null ? this.map.getBearing() : bearing, pitch, zoom, padding: pad });
+    },
+
+    idle(pad, view) {
+      const flat = view === 'heading' || view === 'north';
+      this.map.easeTo({ pitch: this.theme === 'neon' && !flat ? 45 : 0, bearing: 0, padding: pad || { top: 0, bottom: 0, left: 0, right: 0 }, duration: 600 });
     }
   };
 

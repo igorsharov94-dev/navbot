@@ -67,6 +67,7 @@
   .mv-poi { width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 2px solid #8a4dff; display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; }
   #fab { position: absolute; right: 10px; top: 42%; z-index: 1001; display: flex; flex-direction: column; gap: 8px; }
   #fab button { width: 48px; height: 48px; border-radius: 50%; padding: 0; font-size: 22px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  #fab #btnView { font-size: 14px; font-weight: 800; }
   #speedo { position: absolute; left: 14px; z-index: 1001; font-weight: 800; line-height: .9; color: #1f7ae0; text-shadow: 0 0 3px #fff, 0 0 3px #fff; pointer-events: none; }
   #speedo .v { font-size: 56px; }
   #speedo .u { font-size: 13px; font-weight: 700; display: block; }
@@ -113,6 +114,7 @@
 <div id="fab">
   <button id="btnTheme" title="Вигляд карти">🌃</button>
   <button id="btnPoi" title="Місця поруч">🛒</button>
+  <button id="btnView" title="Вид камери">3D</button>
 </div>
 
 <div id="setup" class="panel">
@@ -220,6 +222,8 @@
       <li><b>Завершити</b> — закінчити поїздку.</li>
       <li><b>🌃 / 🗺</b> праворуч на мапі — неонова 3D-карта або звичайна. Якщо телефон гальмує — оберіть звичайну.</li>
       <li><b>🛒</b> праворуч на мапі — показати або сховати місця вздовж маршруту.</li>
+      <li><b>3D / 2D / N↑</b> праворуч на мапі — вид камери: 3D за машиною, зверху за напрямком руху або зверху з північчю вгорі.</li>
+      <li>Якщо посунули мапу пальцем — за 8 секунд вона сама повернеться до машини. Одразу — кнопка «Центр».</li>
     </ul>
 
     <h3>5. Мітки</h3>
@@ -277,6 +281,7 @@
     GPS_MAX_SPEED: 160,     // км/ч — быстрее «едет» только подмена
     GPS_BACK_MAXD: 80,      // м — в режиме датчиков принимаем GPS только рядом с маршрутом
     GPS_GOOD_NEEDED: 3,     // сколько хороших точек подряд нужно, чтобы снова поверить GPS
+    GPS_WEAK_ACC: 30,       // м — гірша точність = «слабкий GPS»: точкам довіряємо частково
     OFFROUTE_D: 60,         // м — съезд с маршрута в режиме GPS
     TURN_START: 0.12,       // рад/с — начало поворота
     TURN_END: 0.05,         // рад/с — конец поворота
@@ -372,36 +377,40 @@
   if (!MV.supported()) toast('Телефон не підтримує 3D-графіку — мапа може не показуватися', 6000);
   let theme = store.get('nav_theme') === 'classic' ? 'classic' : 'neon';
   MV.init('map', theme, [50.4501, 30.5234]);
-  MV.on('userMove', () => { st.follow = false; });
+  // Якщо користувач посунув мапу — камера відпускає машину, а за 8 с повертається сама
+  MV.on('userMove', () => { st.follow = false; st.userMoveT = performance.now(); });
 
-  // Курс уздовж маршруту — працює і без GPS, бо позицію на маршруті ми знаємо
-  let camBearing = null;
-  function routeBearing() {
+  // Вид камери: '3d' — нахил і за напрямком; 'heading' — зверху за напрямком; 'north' — зверху, північ угорі
+  const VIEWS = { '3d': '3D', heading: '2D', north: 'N↑' };
+  let view = VIEWS[store.get('nav_view')] ? store.get('nav_view') : '3d';
+  let camBearing = null;  // згладжений курс для камери й стрілки
+
+  // Курс уздовж маршруту в точці s — працює і без GPS, бо позицію на маршруті ми знаємо
+  function bearingAt(s) {
     if (!route) return null;
-    const a = NC.pointAt(route, Math.max(0, st.s - 10)), b = NC.pointAt(route, Math.min(route.total, st.s + 30));
-    if (NC.dist(a, b) < 5) return camBearing;
-    const target = NC.bearing(a, b);
-    if (camBearing == null) camBearing = target;
-    else camBearing = (camBearing + NC.norm180(target - camBearing) * 0.5 + 360) % 360;
-    return camBearing;
-  }
-  function drawPos(p, r, kind) {
-    MV.drawPos(p, r, kind, st.nav && route ? camBearing : null);
+    const a = NC.pointAt(route, Math.max(0, s - 10)), b = NC.pointAt(route, Math.min(route.total, s + 30));
+    return NC.dist(a, b) < 5 ? null : NC.bearing(a, b);
   }
   function camPadding() {
     const top = $('top').offsetHeight + 8;
-    const bottom = st.nav ? $('drive').offsetHeight + 8 : $('setup').offsetHeight + 8;
-    // У неоні машина внизу екрана (≈62% висоти), щоб бачити дорогу попереду
-    return theme === 'neon' && st.nav
+    const panel = st.nav ? $('drive') : $('setup');
+    const bottom = panel.offsetHeight + 8;
+    // За напрямком машина внизу екрана (≈62% висоти), щоб бачити дорогу попереду
+    return view !== 'north' && (st.nav || freeDriving())
       ? { top: Math.max(top, Math.round(window.innerHeight * 0.45)), bottom, left: 0, right: 0 }
       : { top, bottom, left: 0, right: 0 };
+  }
+  // Їдемо без маршруту: свіжий GPS і швидкість понад ~7 км/год
+  function freeDriving() {
+    return !st.nav && !st.pick && G.lastGood && Date.now() - G.lastGood.t < 10000 &&
+      G.lastGood.speed != null && G.lastGood.speed > 2;
   }
 
   // ---------- Состояние ----------
   const st = {
     nav: false, mode: 'none',          // 'gps' | 'dr' (датчики)
     s: 0, anchorS: 0, lastTurnS: -1e9, // положение вдоль маршрута, м
-    follow: true, speedMode: 'auto', vAuto: 22 / 3.6, vManual: 20, track: [],
+    follow: true, userMoveT: 0, onRoute: true, lastSwitchT: 0, speedMode: 'auto', vAuto: 22 / 3.6, vManual: 20, track: [],
     pick: null, start: null, dest: null, destName: '',
     spoken: {}, offStreak: 0, lastReroute: 0, capT: 0, lastSnapSig: null,
     arrived: false, lastPan: 0
@@ -561,7 +570,7 @@
         this.busy = false;
         if (loc) {
           G.denied = false;
-          onFix({ lat: loc.latitude, lon: loc.longitude, acc: loc.horizontal_accuracy, speed: loc.speed, t: Date.now() });
+          onFix({ lat: loc.latitude, lon: loc.longitude, acc: loc.horizontal_accuracy, speed: loc.speed, heading: loc.course, t: Date.now() });
         } else if (W.LocationManager.isAccessRequested && !W.LocationManager.isAccessGranted) {
           G.denied = true;
         }
@@ -570,7 +579,7 @@
     startBrowser() {
       if (!navigator.geolocation) return;
       navigator.geolocation.watchPosition(
-        p => onFix({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, speed: p.coords.speed, t: Date.now() }),
+        p => onFix({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, speed: p.coords.speed, heading: p.coords.heading, t: Date.now() }),
         err => { if (err.code === 1) G.denied = true; },
         { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
       );
@@ -613,38 +622,57 @@
       return;
     }
     G.badStreak = 0; G.goodStreak++;
-    if (st.nav && st.mode === 'dr' && G.goodStreak < CFG.GPS_GOOD_NEEDED) return;
+    // Деякі телефони не дають швидкість — рахуємо за зміщенням між точками
+    if ((f.speed == null || f.speed < 0) && G.lastGood && f.t - G.lastGood.t > 500) {
+      f.speed = NC.dist([G.lastGood.lat, G.lastGood.lon], [f.lat, f.lon]) / ((f.t - G.lastGood.t) / 1000);
+      if (f.speed < 1) f.speed = 0;
+    }
+    if (st.nav && st.mode === 'dr' && (G.goodStreak < CFG.GPS_GOOD_NEEDED || (f.acc || 20) > CFG.GPS_WEAK_ACC)) return;
 
     if (f.speed != null && f.speed >= 0) {
       Motion.learn(f.speed);
     }
     updateAvgSpeed(f);
+    // Курс: з GPS, а якщо його немає — за зміщенням між точками
+    if (f.heading != null && f.heading >= 0 && f.speed != null && f.speed > 2) G.heading = f.heading;
+    else if (G.hdgRef && NC.dist([G.hdgRef.lat, G.hdgRef.lon], [f.lat, f.lon]) > 12) G.heading = NC.bearing([G.hdgRef.lat, G.hdgRef.lon], [f.lat, f.lon]);
+    if (!G.hdgRef || NC.dist([G.hdgRef.lat, G.hdgRef.lon], [f.lat, f.lon]) > 12) G.hdgRef = f;
     G.lastGood = f;
     G.lastReason = '';
 
     if (st.nav && route) {
       if (st.mode !== 'gps') toGPS();
-      st.s = pr.s; st.anchorS = st.s;
-      if (pr.d > CFG.OFFROUTE_D) {
+      const weak = (f.acc || 20) > CFG.GPS_WEAK_ACC;
+      st.onRoute = pr.d <= 50;
+      if (st.onRoute) {
+        // Слабкий GPS лише підтягує позицію, точний — виправляє майже повністю.
+        // Маленькі відкати назад ігноруємо: це дрижання, машина назад не їде.
+        const err = pr.s - st.s;
+        let gain = Math.abs(err) > 250 ? 1 : weak ? 0.25 : 0.7;
+        if (err < 0 && err > -40) gain *= 0.3;
+        st.s = clamp(st.s + gain * err, 0, route.total);
+      }
+      st.anchorS = st.s;
+      if (!weak && pr.d > CFG.OFFROUTE_D) {
         st.offStreak++;
         if (st.offStreak >= 3) { st.offStreak = 0; reroute([f.lat, f.lon]); }
-      } else st.offStreak = 0;
+      } else if (pr.d <= CFG.OFFROUTE_D) st.offStreak = 0;
     }
-    if (!st.nav || st.mode === 'gps') {
-      drawPos([f.lat, f.lon], f.acc || 20, 'gps');
-      if (!st.nav && !st.centered) { st.centered = true; MV.setView([f.lat, f.lon], 15); }
-    }
+    if (!st.nav && !st.centered) { st.centered = true; MV.setView([f.lat, f.lon], 15); }
   }
 
   function toDR(reason) {
     track('gps-lost', 'GPS втрачено, перехід на датчики');
-    st.mode = 'dr'; st.anchorS = st.s; st.capT = 0;
-    say('Сигнал GPS недостовірний. Веду за датчиками.');
+    st.mode = 'dr'; st.anchorS = st.s; st.capT = 0; st.onRoute = true;
+    if (Date.now() - st.lastSwitchT > 30000) say('Сигнал GPS недостовірний. Веду за датчиками.');
+    st.lastSwitchT = Date.now();
     toast('GPS: ' + reason + '. Переходжу на датчики', 4000);
   }
   function toGPS() {
     st.mode = 'gps';
-    say('GPS відновлено');
+    if (Date.now() - st.lastSwitchT > 30000) say('GPS відновлено');
+    else toast('GPS відновлено', 1500);
+    st.lastSwitchT = Date.now();
   }
 
   // ---------- Повороты и остановки ----------
@@ -798,7 +826,7 @@
 
   async function reroute(from, force) {
     if (!st.dest) return;
-    if (!force && Date.now() - st.lastReroute < 8000) return;
+    if (!force && Date.now() - st.lastReroute < 20000) return;
     st.lastReroute = Date.now();
     try {
       $('instr').textContent = 'Перебудовую маршрут…';
@@ -853,7 +881,7 @@
     st.start = null; MV.marker('start', null);
     $('drive').classList.add('hidden'); $('setup').classList.remove('hidden');
     $('speedo').classList.add('hidden'); $('near').classList.add('hidden');
-    MV.idle(camPadding());
+    MV.idle(camPadding(), view);
     $('instr').textContent = 'Куди їдемо?'; $('sub').textContent = 'Введіть адресу призначення внизу';
     try { if (wakeLock) wakeLock.release(); } catch (e) {}
     try { if (hasSpeech) speechSynthesis.cancel(); } catch (e) {}
@@ -925,17 +953,12 @@
         } else st.capT = 0;
         st.s = Math.min(ns, route.total);
       } else {
+        // Між точками GPS (раз на 1–2 с) рухаємо позицію за останньою швидкістю — без ривків
+        const g = G.lastGood;
+        if (g && st.onRoute && g.speed != null && g.speed > 0.5 && Date.now() - g.t < 3000) {
+          st.s = Math.min(st.s + g.speed * dt, route.total);
+        }
         for (const t of route.turns) if (t.s < st.s - 10 && t.s > st.lastTurnS) st.lastTurnS = t.s;
-      }
-
-      const p = NC.pointAt(route, st.s);
-      const brg = routeBearing();
-      const c = st.mode === 'gps' && G.lastGood ? [G.lastGood.lat, G.lastGood.lon] : p;
-      if (st.mode === 'dr') drawPos(p, Math.max(30, 30 + 0.15 * (st.s - st.anchorS)), 'dr');
-      else if (G.lastGood) drawPos(c, G.lastGood.acc || 20, 'gps');
-      if (st.follow && now - st.lastPan > 850) {
-        st.lastPan = now;
-        MV.follow(c, brg, camPadding());
       }
       updateGuidance();
       updateNear();
@@ -945,6 +968,51 @@
     if (Cal.open) updateCal();
   }
   setInterval(tick, 200);
+
+  // ---------- Камера й стрілка: плавно, кожен кадр ----------
+  const disp = { s: null, p: null };
+  const lerpAng = (a, b, k) => a == null ? b : b == null ? a : (a + NC.norm180(b - a) * k + 360) % 360;
+  let lastFrame = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.1, (now - lastFrame) / 1000);
+    lastFrame = now;
+    let p = null, brg = null, r = 20, kind = 'gps';
+    const g = G.lastGood;
+    if (st.nav && route) {
+      // показана позиція плавно наздоганяє розрахункову
+      if (disp.s == null || Math.abs(st.s - disp.s) > 300) disp.s = st.s;
+      else disp.s += (st.s - disp.s) * Math.min(1, dt * 4);
+      kind = st.mode === 'dr' ? 'dr' : 'gps';
+      if (st.mode === 'dr' || st.onRoute || !g) {
+        p = NC.pointAt(route, disp.s);
+        brg = bearingAt(disp.s);
+      } else {
+        p = smoothTo([g.lat, g.lon], dt); brg = G.heading;   // з’їхали з маршруту — показуємо GPS як є
+      }
+      r = st.mode === 'dr' ? Math.max(30, 30 + 0.15 * (st.s - st.anchorS)) : (g && g.acc) || 20;
+    } else if (g) {
+      p = smoothTo([g.lat, g.lon], dt);
+      brg = g.speed != null && g.speed > 1.5 ? G.heading : null;
+      r = g.acc || 20;
+    }
+    if (p) {
+      if (brg != null) camBearing = lerpAng(camBearing, brg, Math.min(1, dt * 3));
+      MV.drawPos(p, r, kind, brg != null || (st.nav && route) ? camBearing : null);
+      // автоповернення камери через 8 с після того, як мапу посунули
+      if (!st.follow && st.userMoveT && now - st.userMoveT > 8000 && (st.nav || freeDriving())) st.follow = true;
+      if (st.follow && (st.nav || freeDriving())) {
+        const v = st.mode === 'gps' && g && g.speed != null ? g.speed : (Motion.moving ? curSpeed() : 0);
+        MV.cam(p, view === 'north' ? 0 : camBearing, view === '3d' ? 60 : 0, 17.5 - clamp((v - 8) / 15, 0, 1) * 1.3, camPadding());
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  function smoothTo(target, dt) {
+    if (!disp.p || NC.dist(disp.p, target) > 200) disp.p = target;
+    else { const k = Math.min(1, dt * 3); disp.p = [disp.p[0] + (target[0] - disp.p[0]) * k, disp.p[1] + (target[1] - disp.p[1]) * k]; }
+    return disp.p;
+  }
+  requestAnimationFrame(frame);
 
   function nextStepIdx() {
     for (let i = 1; i < route.steps.length; i++) {
@@ -990,7 +1058,8 @@
     const el = $('status');
     let txt, cls;
     if (st.nav) {
-      if (st.mode === 'gps') { txt = '🛰 GPS у нормі'; cls = 'st-gps'; }
+      if (st.mode === 'gps' && G.lastGood && (G.lastGood.acc || 20) > CFG.GPS_WEAK_ACC) { txt = '🛰 GPS слабкий (±' + Math.round(G.lastGood.acc) + ' м)'; cls = 'st-dr'; }
+      else if (st.mode === 'gps') { txt = '🛰 GPS у нормі'; cls = 'st-gps'; }
       else { txt = '🧭 За датчиками' + (G.lastReason ? ' · GPS: ' + G.lastReason : ''); cls = 'st-dr'; }
     } else if (G.denied) { txt = 'Немає доступу до геопозиції — натисніть'; cls = 'st-bad'; }
     else if (freshGood()) { txt = '🛰 GPS у нормі'; cls = 'st-gps'; }
@@ -1059,7 +1128,15 @@
   $('btnStop').onclick = stopNav;
   $('btnTurnDone').onclick = turnDone;
   $('btnHere').onclick = () => { st.pick = 'here'; st.follow = false; toast('Натисніть на мапі, де ви зараз', 4000); };
-  $('btnFollow').onclick = () => { st.follow = true; st.lastPan = 0; };
+  $('btnFollow').onclick = () => { st.follow = true; st.userMoveT = 0; };
+  function renderView() { $('btnView').textContent = VIEWS[view]; }
+  $('btnView').onclick = () => {
+    view = view === '3d' ? 'heading' : view === 'heading' ? 'north' : '3d';
+    store.set('nav_view', view); renderView(); st.follow = true;
+    toast(view === '3d' ? '3D за машиною' : view === 'heading' ? 'Зверху, за напрямком руху' : 'Зверху, північ угорі', 1500);
+    if (!st.nav && !freeDriving()) MV.idle(camPadding(), view);
+  };
+  renderView();
   $('btnOffYes').onclick = () => { $('offroute').classList.add('hidden'); $('btnHere').onclick(); };
   $('btnOffNo').onclick = () => { $('offroute').classList.add('hidden'); };
   $('status').onclick = () => {
@@ -1121,7 +1198,7 @@
   $('btnTheme').onclick = () => {
     theme = theme === 'neon' ? 'classic' : 'neon';
     store.set('nav_theme', theme); MV.setTheme(theme); renderTheme();
-    st.lastPan = 0; if (!st.nav) MV.idle(camPadding());
+    if (!st.nav) MV.idle(camPadding(), view);
     toast(theme === 'neon' ? 'Неонова 3D-карта' : 'Звичайна карта', 1500);
   };
   renderTheme();
@@ -1142,7 +1219,7 @@
     go();
   };
   MV.setPins(pins, openPin);
-  setTimeout(() => MV.idle(camPadding()), 300);
+  setTimeout(() => MV.idle(camPadding(), view), 300);
 
   // Демо для перевірки вигляду: ?demo=1 (імітація поїздки без GPS)
   if (/[?&]demo=1/.test(location.search)) {
