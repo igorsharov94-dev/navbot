@@ -19,8 +19,11 @@ export default {
     if (url.pathname === '/app') return app(request, env, ctx);
     if (request.method === 'POST' && url.pathname === '/send') return sendMany(request, env);
     if (request.method !== 'POST') return new Response('ok');
+    // лише справжній Telegram: він надсилає секрет у заголовку (задається в connectWebhook)
+    if (!env.SEND_KEY || request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.SEND_KEY) return new Response('forbidden', { status: 403 });
     const body = await request.text();
-    ctx.waitUntil(fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, redirect: 'follow' }));
+    ctx.waitUntil(fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, redirect: 'follow',
+      body: JSON.stringify({ tg: JSON.parse(body), key: env.SEND_KEY }) }));
     return new Response('ok');
   },
 };

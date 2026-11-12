@@ -48,10 +48,17 @@ function test() {
 // ===== Вебхук =====
 function doPost(e) {
   try {
-    const u = JSON.parse(e.postData.contents);
+    let u = JSON.parse(e.postData.contents);
+    const k = (prop_('CF_KEY') || '').trim();
+    // через посередника: оновлення Telegram загорнуте в { tg, key } — чужі запити (без ключа) ігноруємо
+    if (u.tg !== undefined) {
+      if (!k || u.key !== k) return ContentService.createTextOutput('forbidden');
+      u = u.tg;
+    } else if ((prop_('PROXY_URL') || '').trim() && u.app_event === undefined) {
+      return ContentService.createTextOutput('forbidden');   // є посередник, а запит прийшов напряму — підробка
+    }
     // позначка з міні-застосунку (переслав посередник; підпис Telegram перевіряємо тут)
     if (u.app_event !== undefined) {
-      const k = (prop_('CF_KEY') || '').trim();
       if (k && u.key === k) appEvent_(u.app_event, u.init_data);
       return ContentService.createTextOutput('ok');
     }
@@ -69,7 +76,10 @@ function doPost(e) {
 function connectWebhook() {
   const url = (prop_('PROXY_URL') || prop_('WEBAPP_URL') || '').trim();
   if (!/^https:\/\//.test(url)) throw new Error('Впишіть PROXY_URL (…workers.dev) або WEBAPP_URL (…/exec)');
-  const r = tgCall_('setWebhook', { url: url, allowed_updates: ['message', 'callback_query'] });
+  const proxy = !!(prop_('PROXY_URL') || '').trim(), key = (prop_('CF_KEY') || '').trim();
+  if (proxy && !/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('CF_KEY: щонайменше 16 латинських літер/цифр');
+  // секрет у заголовку — посередник пропускає лише справжні запити Telegram
+  const r = tgCall_('setWebhook', Object.assign({ url: url, allowed_updates: ['message', 'callback_query'] }, proxy ? { secret_token: key } : {}));
   if (!r.ok) throw new Error(r.description);
   setCommands_();
   console.log('Готово: бот відповідає миттєво.');

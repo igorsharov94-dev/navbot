@@ -13,7 +13,7 @@ class Sheet { constructor(n) { this.n = n; this.d = []; }
   getLastRow() { return this.d.length; } getRange(a, b, c, d) { if (typeof a === 'string') { const m = a.match(/([A-Z])(\d+)/); return new Range(this, +m[2], m[1].charCodeAt(0) - 64); } return new Range(this, a, b, c, d); }
   setFrozenRows() {} deleteRow(r) { this.d.splice(r - 1, 1); } deleteRows(r, n) { this.d.splice(r - 1, n); } }
 const sheets = {};
-const props = { TG_TOKEN: TOKEN, TG_ADMIN_ID: ADMIN, CF_KEY: 'secret' };
+const props = { TG_TOKEN: TOKEN, TG_ADMIN_ID: ADMIN, CF_KEY: 'secret', PROXY_URL: 'https://navbot.test.workers.dev' };
 const cache = {};
 const ctx = {
   console, JSON, Date, Math, String, Number, Object, Array, RegExp, Error,
@@ -44,7 +44,9 @@ vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(process.argv[2] || require('path').join(__dirname, '../../bot/navbot_bot.gs'), 'utf8') + '\n;this.__api={doPost,handleUpdate_,subs_,subsText_,activityText_,verifyInitData_};', ctx);
 const api = ctx.__api;
 let uid = 1;
-const post = u => api.doPost({ postData: { contents: JSON.stringify(Object.assign({ update_id: uid++ }, u)) } });
+// через посередника: оновлення загорнуте в { tg, key }; позначки з навігатора — як є
+const post = u => api.doPost({ postData: { contents: JSON.stringify(u.app_event !== undefined ? u : { tg: Object.assign({ update_id: uid++ }, u), key: 'secret' }) } });
+const postRaw = obj => api.doPost({ postData: { contents: JSON.stringify(obj) } });
 const msg = (from, extra) => post({ message: Object.assign({ message_id: 1000 + uid, chat: Object.assign({ type: 'private' }, from) }, extra) });
 const sent = (filter) => calls.filter(filter);
 const reset = () => { calls = []; };
@@ -55,4 +57,4 @@ function initData(user, ageSec) {
   const hash = crypto.createHmac('sha256', secret).update(dcs).digest('hex');
   return Object.entries(fields).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&') + '&hash=' + hash;
 }
-module.exports = { api, post, msg, sent, reset, initData, sheets, props, blocked, ADMIN, get calls() { return calls; } };
+module.exports = { api, post, postRaw, msg, sent, reset, initData, sheets, props, blocked, ADMIN, get calls() { return calls; } };

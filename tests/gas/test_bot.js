@@ -26,6 +26,12 @@ ok(H.sheets['Підписники'].d.length === before, 'чужий ключ п
 H.post({ app_event: 'open', key: 'secret', init_data: H.initData({ id: 9997, first_name: 'Старий' }, 2 * 86400) });
 ok(H.sheets['Підписники'].d.length === before, 'застарілий підпис (>доби) відхилено');
 
+// 2б. Підробка: запит напряму на …/exec або з чужим ключем — ігнорується
+H.reset();
+H.postRaw({ update_id: 777, message: { message_id: 1, chat: { id: 1000, type: 'private' }, text: '/post Підробка' } });
+H.postRaw({ tg: { update_id: 778, message: { message_id: 2, chat: { id: 1000, type: 'private' }, text: '/post Підробка 2' } }, key: 'wrong' });
+ok(!H.sent(c => /Підробка/.test(c.p.text || '')).length, 'підроблена «команда адміна» напряму на скрипт не спрацьовує');
+
 // 3. Розсилка тексту
 H.reset(); H.blocked.add('2002');
 H.msg(A, { text: '/post Оновлення навігатора: нова карта!' });
