@@ -172,6 +172,7 @@
   </div>
   <div id="accStats" class="hint"></div>
   <div class="row"><button id="btnLog">📄 Журнал поїздки</button><button class="btnHelp">❓ Інструкція</button></div>
+  <div class="row"><button class="btnWrite">✉️ Написати нам</button></div>
 </div>
 
 <div id="offroute" class="panel modal hidden">
@@ -260,7 +261,7 @@
     </ul>
     <div class="warn">⚠️ Водію не торкатися екрана під час руху — кнопки для пасажира. Навігатор допоміжний: стежте за дорогою і знаками.</div>
   </div>
-  <div class="foot"><button id="btnHelpClose" class="primary" style="width:100%">Зрозуміло</button></div>
+  <div class="foot"><div class="row" style="margin-top:0"><button class="btnWrite">✉️ Написати нам</button><button id="btnHelpClose" class="primary">Зрозуміло</button></div></div>
 </div>
 
 <div id="toast"></div>
@@ -294,6 +295,8 @@
     OSRM: 'https://router.project-osrm.org/route/v1/driving/',
     NOMINATIM: 'https://nominatim.openstreetmap.org/search',
     OVERPASS: 'https://overpass-api.de/api/interpreter',
+    BOT_API: '',            // адреса посередника бота (…workers.dev) — для обліку користувачів; порожньо = вимкнено
+    BOT_LINK: 'https://t.me/kyiv_nav2026_bot',
     SPEED_STEP: 5, SPEED_MIN: 5, SPEED_MAX: 90,   // км/год — ручна швидкість
     GPS_MAX_ACC: 80,        // м — хуже этой точности не верим
     GPS_MAX_SPEED: 160,     // км/ч — быстрее «едет» только подмена
@@ -1156,6 +1159,7 @@
     MV.setView(from, 17);
     requestWake();
     track(st.mode === 'gps' ? 'route-gps' : 'route-nogps', st.mode === 'gps' ? 'Маршрут (з GPS)' : 'Маршрут (без GPS)');
+    askWriteAccess();
     say(st.mode === 'gps' ? 'Маршрут побудовано. Поїхали.' : 'Маршрут побудовано. Веду за датчиками.');
   }
 
@@ -1610,6 +1614,35 @@
   renderSound();
   $('btnCalClose').onclick = () => { Cal.open = false; $('calib').classList.add('hidden'); };
   $('btnLog').onclick = () => Log.share();
+
+  // ---------- Зв’язок із ботом: облік користувачів і «Написати нам» ----------
+  // Позначка «відкрили навігатор» — раз на добу; підпис Telegram (initData) перевіряє сервер бота.
+  function botEvent(event) {
+    if (!CFG.BOT_API || !inTg || !W.initData) return;
+    try {
+      fetch(CFG.BOT_API.replace(/\/+$/, '') + '/app', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, initData: W.initData }), keepalive: true }).catch(() => {});
+    } catch (e) {}
+  }
+  (function () {
+    const today = new Date().toISOString().slice(0, 10);
+    if (store.get('nav_seen') !== today) { store.set('nav_seen', today); botEvent('open'); }
+  })();
+  // Після першого маршруту — один раз просимо дозволу, щоб бот міг надсилати новини навігатора
+  function askWriteAccess() {
+    if (!CFG.BOT_API || store.get('nav_wa') || !tgv('6.9') || !W.requestWriteAccess) return;
+    store.set('nav_wa', '1');
+    setTimeout(() => {
+      try { W.requestWriteAccess(ok => { if (ok) { botEvent('write_ok'); toast('🔔 Новини навігатора приходитимуть у бот', 2500); } }); } catch (e) {}
+    }, 4000);
+  }
+  document.querySelectorAll('.btnWrite').forEach(b => {
+    b.onclick = () => {
+      const link = CFG.BOT_LINK + '?start=write';
+      try { if (inTg && W.openTelegramLink) { W.openTelegramLink(link); return; } } catch (e) {}
+      window.open(link, '_blank');
+    };
+  });
   $('btnInvert').onclick = () => {
     Motion.invert = !Motion.invert; store.set('nav_invert', Motion.invert ? '1' : '0'); Cal.last = '';
   };
