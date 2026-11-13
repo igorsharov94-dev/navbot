@@ -27,7 +27,7 @@
 | `pois-kyiv.json` | База Києва з OpenStreetMap: ~5600 місць і ~1600 світлофорів (щоб не залежати від перевантаженого сервера Overpass) |
 | `test/` | Тестова копія сайту для перевірки змін перед викладкою |
 | `bot/` | Бот як у ЛМ10 (`navbot_bot.gs` + `worker.js`): збір користувачів, розсилки `/post`, «Написати нам». Інструкція — `bot/SETUP.md`. `bot.py` — старий простий варіант |
-| `tests/` | Перевірки: `node tests/test_core.js`, `node tests/test_profile.js`, `node tests/gas/test_bot.js` (бот) |
+| `tests/` | Перевірки: `node tests/test_core.js`, `node tests/test_profile.js`, `node tests/test_vib.js` (швидкість за вібрацією), `node tests/gas/test_bot.js` (бот) |
 
 ## Бот (необов’язково)
 

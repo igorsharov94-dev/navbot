@@ -603,23 +603,58 @@
     load() {
       try { const b = JSON.parse(store.get('nav_vib') || 'null'); if (b && b.length === this.edges.length + 1) this.bins = b; } catch (e) {}
       if (!this.bins) this.bins = Array.from({ length: this.edges.length + 1 }, () => [0, 0]);   // [кількість, швидкість м/с]
+      try { const b = JSON.parse(store.get('nav_vib2') || 'null'); if (b && b.length === this.sEdges.length + 1) this.sb = b; } catch (e) {}
+      if (!this.sb) this.sb = Array.from({ length: this.sEdges.length + 1 }, () => [0, 0, 0]);   // [кількість, сер. ln(вібрації), сер. швидкість]
+    },
+    // Зворотна таблиця «швидкість → вібрація». Пряма («вібрація → швидкість») через шум стискає діапазон:
+    // на 60–90 км/год показувала ~38 (журнал 13.11). Обернена крива цього не має.
+    sEdges: [2, 4, 6, 8, 10, 13, 16, 20, 25],   // м/с
+    sb: null,
+    invPts() {
+      const pts = [];
+      for (const b of this.sb) {
+        if (b[0] < 15) continue;
+        if (pts.length && b[1] <= pts[pts.length - 1][0] + 0.02) { const q = pts[pts.length - 1]; q[1] = Math.max(q[1], b[2]); continue; }
+        pts.push([b[1], b[2]]);
+      }
+      return pts.length >= 3 ? pts : null;
     },
     idx(x) { let i = 0; while (i < this.edges.length && x > this.edges[i]) i++; return i; },
     learn(std, speed) {
       if (std == null || speed == null || speed < 0 || speed > 40) return;
       const b = this.bins[this.idx(std)];
       b[0]++; b[1] += (speed - b[1]) / Math.min(b[0], 200);
-      if (Date.now() - this.lastSave > 30000) { this.lastSave = Date.now(); store.set('nav_vib', JSON.stringify(this.bins.map(x => [x[0], +x[1].toFixed(2)]))); }
+      if (speed >= 1 && std > 0) {
+        let i = 0; while (i < this.sEdges.length && speed > this.sEdges[i]) i++;
+        const c = this.sb[i], n = Math.min(c[0] + 1, 300);
+        c[0]++; c[1] += (Math.log(std) - c[1]) / n; c[2] += (speed - c[2]) / n;
+      }
+      if (Date.now() - this.lastSave > 30000) {
+        this.lastSave = Date.now();
+        store.set('nav_vib', JSON.stringify(this.bins.map(x => [x[0], +x[1].toFixed(2)])));
+        store.set('nav_vib2', JSON.stringify(this.sb.map(x => [x[0], +x[1].toFixed(3), +x[2].toFixed(2)])));
+      }
     },
     total() { return this.bins.reduce((a, b) => a + b[0], 0); },
     trained() {
       const t = this.total() >= 120 && this.bins.filter(b => b[0] >= 10).length >= 3;
-      if (t && !this.was) { this.was = true; st.k = 1; st.kGps = st.kOdo = 0; }   // інша модель швидкості — поправку вчимо заново
+      const inv = t && !!this.invPts();
+      if (t && this.was !== (inv ? 2 : 1)) { this.was = inv ? 2 : 1; st.k = 1; st.kGps = st.kOdo = 0; }   // інша модель швидкості — поправку вчимо заново
       return t;
     },
     // швидкість за вібрацією: інтерполяція між навченими кошиками, не спадна зі зростанням вібрації
     predict(std) {
       if (std == null) return null;
+      const ip = this.invPts();
+      if (ip) {
+        const x = Math.log(Math.max(std, 1e-3));
+        if (x <= ip[0][0]) return ip[0][1];
+        for (let i = 1; i < ip.length; i++) if (x <= ip[i][0]) {
+          const f = (x - ip[i - 1][0]) / (ip[i][0] - ip[i - 1][0]);
+          return ip[i - 1][1] + f * (ip[i][1] - ip[i - 1][1]);
+        }
+        return ip[ip.length - 1][1];
+      }
       const pts = []; let mx = 0;
       this.bins.forEach((b, i) => {
         if (b[0] < 10) return;
